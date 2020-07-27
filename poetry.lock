@@ -64,16 +64,11 @@ tests = ["pytest (>=3.2.1,<3.3.0 || >3.3.0)"]
 
 [[package]]
 category = "main"
-description = ""
+description = "A bridge between zsh and Python."
 name = "brish"
 optional = false
-python-versions = "^3.7"
-version = "0.2.1"
-
-[package.source]
-reference = "8919020082e7815c9bc11a7668f895f23881df7e"
-type = "git"
-url = "https://github.com/NightMachinary/brish.git"
+python-versions = ">=3.7.0,<4.0.0"
+version = "0.2.2"
 
 [[package]]
 category = "main"
@@ -578,7 +573,7 @@ python-versions = ">=3.6.1"
 version = "8.1"
 
 [metadata]
-content-hash = "ad0f43825b1a04728b874d36452f9e70631fe0f430abfb353903e319148e54b8"
+content-hash = "48bc44531df580cfdfb97e0b07118d82fd557041b042379d3d89668d8c4df313"
 python-versions = "^3.7"
 
 [metadata.files]
@@ -636,7 +631,10 @@ bcrypt = [
     {file = "bcrypt-3.1.7-cp38-cp38-win_amd64.whl", hash = "sha256:6305557019906466fc42dbc53b46da004e72fd7a551c044a827e572c82191752"},
     {file = "bcrypt-3.1.7.tar.gz", hash = "sha256:0b0069c752ec14172c5f78208f1863d7ad6755a6fae6fe76ec2c80d13be41e42"},
 ]
-brish = []
+brish = [
+    {file = "brish-0.2.2-py3-none-any.whl", hash = "sha256:e8df8beaa3da731218fc56d15627af519b7bff2e6eb990220c35b23de9cb6d14"},
+    {file = "brish-0.2.2.tar.gz", hash = "sha256:ecc3dedd9aec7e3159e8b8af014520983705596bd8a393cdbd6c8b03dfaad722"},
+]
 certifi = [
     {file = "certifi-2020.6.20-py2.py3-none-any.whl", hash = "sha256:8fc0819f1f30ba15bdb34cceffb9ef04d99f420f68eb75d901e9560b8749fc41"},
     {file = "certifi-2020.6.20.tar.gz", hash = "sha256:5930595817496dd21bb8dc35dad090f1c2cd0adfaf21204bf6732ca5d8ee34d3"},
