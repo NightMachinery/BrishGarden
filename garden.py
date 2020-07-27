@@ -1,6 +1,6 @@
 from typing import Optional
 
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Response, Request
 app = FastAPI()
 
 
@@ -16,6 +16,10 @@ def read_root():
 @app.post("/test/")
 def test(body: dict):
     return body
+
+@app.get("/ip/")
+async def get_ip(request: Request):
+    return str(request.client)
 
 @app.post("/zsh/")
 def cmd_zsh(body: dict):
@@ -34,4 +38,4 @@ def cmd_zsh(body: dict):
     else:
         return {"cmd": cmd, "brishes": len(brishes), "out": res.out, "err": res.err, "retcode": res.retcode}
 
-# Use `pass: str`, hash it a lot along BRISHGARDEN_SALT, and compare to BRISHGARDEN_PASS. Abort if any of the two vars are empty.
+# Use `pass: str`, hash it a lot along BRISHGARDEN_SALT, and compare to BRISHGARDEN_PASS. Abort if any of the two vars are empty. We probably need to answer the query right away for this security model to work, because hashing necessarily needs to be expensive.
