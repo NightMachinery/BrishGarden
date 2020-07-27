@@ -1,13 +1,23 @@
 from typing import Optional
 
 from fastapi import FastAPI, Response, Request
-app = FastAPI()
+from pydantic import BaseSettings
 
+
+class Settings(BaseSettings):
+    # disabling the docs
+    openapi_url: str = "" #"/openapi.json"
+
+
+settings = Settings()
+
+app = FastAPI(openapi_url=settings.openapi_url)
 
 import time
 import brish
 brishes = [brish.Brish() for i in range(4)]
-
+for b in brishes:
+    b.z('export GARDEN_ZSH=y')
 
 @app.get("/")
 def read_root():
