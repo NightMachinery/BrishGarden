@@ -1,3 +1,4 @@
+import logging, os, time, brish
 from typing import Optional
 
 from fastapi import FastAPI, Response, Request
@@ -12,9 +13,9 @@ class Settings(BaseSettings):
 settings = Settings()
 
 app = FastAPI(openapi_url=settings.openapi_url)
+logger = logging.getLogger("uvicorn") # alt: from uvicorn.config import logger
 
-import time
-import brish
+seenIPs = {'127.0.0.1', brish.z('myip').out.strip()}
 brishes = [brish.Brish() for i in range(4)]
 for b in brishes:
     b.z('export GARDEN_ZSH=y')
@@ -32,14 +33,22 @@ async def get_ip(request: Request):
     return str(request.client)
 
 @app.post("/zsh/")
-def cmd_zsh(body: dict):
+def cmd_zsh(body: dict, request: Request):
     # GET Method: cmd: str, verbose: Optional[int] = 0
     # body: cmd [verbose: int=0,1] [stdin: str]
+    ip = request.client.host
+    if not (ip in seenIPs):
+        logger.warn(f"New IP seen: {ip}")
+        brish.z("tsend -- {os.environ.get('tlogs')} 'New IP seen by the Garden: '{ip}")
+        seenIPs.add(ip)
     cmd = body.get('cmd', '')
     if cmd == '':
         return Response(content="Empty command received.", media_type="text/plain")
     stdin = body.get('stdin', '')
     verbose = int(body.get('verbose', 0))
+
+    logger.info(f"cmd: {cmd}, stdin: {stdin}")
+
     while len(brishes) <= 0:
         time.sleep(1)
     myBrish = brishes.pop()
