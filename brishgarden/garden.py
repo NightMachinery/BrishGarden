@@ -36,8 +36,10 @@ async def get_ip(request: Request):
 def cmd_zsh(body: dict, request: Request):
     # GET Method: cmd: str, verbose: Optional[int] = 0
     # body: cmd [verbose: int=0,1] [stdin: str]
+    first_seen = False
     ip = request.client.host
     if not (ip in seenIPs):
+        first_seen = True
         logger.warn(f"New IP seen: {ip}")
         brish.z("tsend -- {os.environ.get('tlogs')} 'New IP seen by the Garden: '{ip}")
         seenIPs.add(ip)
@@ -47,7 +49,9 @@ def cmd_zsh(body: dict, request: Request):
     stdin = body.get('stdin', '')
     verbose = int(body.get('verbose', 0))
 
-    logger.info(f"cmd: {cmd}, stdin: {stdin}")
+    log = f"{ip} - cmd: {cmd}, stdin: {stdin}"
+    logger.info(log)
+    first_seen and brish.z("tsend -- {os.environ.get('tlogs')} {log}")
 
     while len(brishes) <= 0:
         time.sleep(1)
