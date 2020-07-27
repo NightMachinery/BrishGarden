@@ -15,6 +15,7 @@ settings = Settings()
 app = FastAPI(openapi_url=settings.openapi_url)
 logger = logging.getLogger("uvicorn") # alt: from uvicorn.config import logger
 
+# Our usage of internal zsh APIs will fail gracefully on foreign systems.
 seenIPs = {'127.0.0.1', brish.z('myip').out.strip()}
 brishes = [brish.Brish() for i in range(4)]
 for b in brishes:
