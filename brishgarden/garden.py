@@ -43,17 +43,19 @@ def cmd_zsh(body: dict, request: Request):
     if not (ip in seenIPs):
         first_seen = True
         logger.warn(f"New IP seen: {ip}")
+        # We log the IP separately, to be sure that an injection attack can't stop the message.
         brish.z("tsend -- {os.environ.get('tlogs')} 'New IP seen by the Garden: '{ip}")
         seenIPs.add(ip)
     cmd = body.get('cmd', '')
-    if cmd == '':
-        return Response(content="Empty command received.", media_type="text/plain")
     stdin = body.get('stdin', '')
     verbose = int(body.get('verbose', 0))
 
     log = f"{ip} - cmd: {cmd}, stdin: {stdin}"
     logger.info(log)
     first_seen and brish.z("tsend -- {os.environ.get('tlogs')} {log}")
+
+    if cmd == '':
+        return Response(content="Empty command received.", media_type="text/plain")
 
     while len(brishes) <= 0:
         time.sleep(1)
