@@ -30,9 +30,15 @@ def read_root():
 def test(body: dict):
     return body
 
-@app.get("/ip/")
+@app.get("/request/")
+async def get_req(request: Request):
+    ans = "### Your Request:\n" + str(request.__dict__)
+    return Response(content=ans, media_type="text/plain")
+
+@app.get("/request/ip/")
 async def get_ip(request: Request):
-    return str(request.client)
+    ans = request.client.host
+    return Response(content=ans, media_type="text/plain")
 
 @app.post("/zsh/")
 def cmd_zsh(body: dict, request: Request):
