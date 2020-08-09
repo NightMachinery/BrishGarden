@@ -9,7 +9,7 @@ license = "MIT"
 python = "^3.7"
 python-multipart = "^0.0.5"
 # brish = {git = "https://github.com/NightMachinary/brish.git"}
-fastapi = {extras = ["all"], version = "^0.60.1"}
+fastapi = {extras = ["all"], version = "^0.61.0"}
 passlib = {extras = ["bcrypt", "argon2"], version = "^1.7.2"}
 python-jose = {extras = ["cryptography"], version = "^3.1.0"}
 brish = "^0.2.2"
