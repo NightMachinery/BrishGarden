@@ -1,4 +1,5 @@
 import logging, os, time, brish
+import re
 from typing import Optional
 
 from fastapi import FastAPI, Response, Request
@@ -19,8 +20,9 @@ logger = logging.getLogger("uvicorn") # alt: from uvicorn.config import logger
 seenIPs = {'127.0.0.1', brish.z('myip').out.strip()}
 # Brish.send_cmd is thread-safe
 brishes = [brish.Brish() for i in range(4)]
+allBrishes = brishes[:]
 for b in brishes:
-    b.z('export GARDEN_ZSH=y')
+    b.z('export GARDEN_ZSH=y ; mkdir -p ~/tmp/garden/ ; cd ~/tmp/garden/ ')
 
 @app.get("/")
 def read_root():
@@ -40,6 +42,9 @@ async def get_ip(request: Request):
     ans = request.client.host
     return Response(content=ans, media_type="text/plain")
 
+
+pattern_magic = re.compile(r"(?im)^%GARDEN_(\S+)\s+((?:.|\n)*)$")
+
 @app.post("/zsh/")
 def cmd_zsh(body: dict, request: Request):
     # GET Method: cmd: str, verbose: Optional[int] = 0
@@ -56,12 +61,29 @@ def cmd_zsh(body: dict, request: Request):
     stdin = body.get('stdin', '')
     verbose = int(body.get('verbose', 0))
 
-    log = f"{ip} - cmd: {cmd}, stdin: {stdin}"
+    log = f"{ip} - cmd: {cmd}, stdin: {stdin}, Brishes in standby: {len(brishes)}"
     logger.info(log)
     first_seen and brish.z("tsend -- {os.environ.get('tlogs')} {log}")
 
     if cmd == '':
         return Response(content="Empty command received.", media_type="text/plain")
+    magic_matches = pattern_magic.match(cmd)
+    if magic_matches is not None:
+        magic_head = magic_matches.group(1)
+        magic_exp = magic_matches.group(2)
+        log = f"Magic received: {magic_head}"
+        logger.info(log)
+        if magic_head == 'ALL':
+            for b in allBrishes:
+                res = b.send_cmd(magic_exp, fork=False, cmd_stdin=stdin)
+                logger.info(res.longstr)
+                if verbose == 1:
+                    log += f"\n{res.longstr}"
+        else:
+            log += "\nUnknown magic!"
+            logger.warn("Unknown magic!")
+
+        return Response(content=log, media_type="text/plain")
 
     while len(brishes) <= 0:
         time.sleep(1)
