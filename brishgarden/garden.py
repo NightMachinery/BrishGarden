@@ -19,10 +19,9 @@ logger = logging.getLogger("uvicorn") # alt: from uvicorn.config import logger
 # Our usage of internal zsh APIs will fail gracefully on foreign systems.
 seenIPs = {'127.0.0.1', brish.z('myip').out.strip()}
 # Brish.send_cmd is thread-safe
-brishes = [brish.Brish() for i in range(4)]
+brishes = [brish.Brish(boot_cmd="export GARDEN_ZSH=y ; mkdir -p ~/tmp/garden/ ; cd ~/tmp/garden/ ") for i in range(4)]
 allBrishes = brishes[:]
-for b in brishes:
-    b.z('export GARDEN_ZSH=y ; mkdir -p ~/tmp/garden/ ; cd ~/tmp/garden/ ')
+
 
 @app.get("/")
 def read_root():
