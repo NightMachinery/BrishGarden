@@ -87,7 +87,12 @@ def cmd_zsh(body: dict, request: Request):
     while len(brishes) <= 0:
         time.sleep(1)
     myBrish = brishes.pop()
-    res = myBrish.send_cmd(cmd, fork=False, cmd_stdin=stdin)
+    ##
+    if verbose == 0:
+        res = myBrish.z("{{ eval {cmd} }} 2>&1", fork=False, cmd_stdin=stdin)
+    else:
+        res = myBrish.send_cmd(cmd, fork=False, cmd_stdin=stdin)
+    ##
     brishes.append(myBrish)
     if verbose == 0:
         return Response(content=res.outerr, media_type="text/plain")
