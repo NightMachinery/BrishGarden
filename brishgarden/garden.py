@@ -126,7 +126,7 @@ def cmd_zsh(body: dict, request: Request):
         log = f"Magic received: {magic_head}"
         logger.info(log)
         if magic_head == "ALL":
-            for b in allBrishes.values:
+            for b in allBrishes.values():
                 res = b.send_cmd(magic_exp, fork=False, cmd_stdin=stdin)
                 logger.info(res.longstr)
                 if verbose == 1:

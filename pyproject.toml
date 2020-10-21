@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "brishgarden"
-version = "0.1.3"
+version = "0.1.4"
 description = "BrishGarden uses Brish to serve an HTTP API that can execute interpreted code (that would otherwise need expensive startup costs) fast. It's also useful as a remote code executor."
 authors = ["NightMachinary <rudiwillalwaysloveyou@gmail.com>"]
 license = "MIT"
@@ -16,6 +16,7 @@ brish = "*"
 
 [tool.poetry.scripts]
 brishgarden = 'brishgarden:main'
+
 
 
 
