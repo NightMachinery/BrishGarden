@@ -1,4 +1,5 @@
 import logging, os, time, brish
+import traceback
 import re
 from typing import Optional
 
@@ -43,11 +44,15 @@ logger = logging.getLogger("uvicorn")  # alt: from uvicorn.config import logger
 
 class EndpointFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
-        # print(record.__dict__)
+        try:
+            # print(record.__dict__)
 
-        # msg: str = record.getMessage()
-        # return msg.find("/zsh/nolog/") == -1
-        return record.scope.get('path', '') != '/zsh/nolog/'
+            # msg: str = record.getMessage()
+            # return msg.find("/zsh/nolog/") == -1
+            return record.scope.get('path', '') != '/zsh/nolog/'
+        except:
+            logger.warn(traceback.format_exc())
+            return True
 
 
 logging.getLogger("uvicorn.access").addFilter(EndpointFilter())
