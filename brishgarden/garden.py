@@ -118,7 +118,7 @@ def cmd_zsh(body: dict, request: Request):
     stdin = body.get("stdin", "")
     verbose = int(body.get("verbose", 0))
 
-    log = f"{ip} - cmd: {cmd}, session: {session}, stdin: {stdin[1:100]}, brishes: {len(brishes)}, allBrishes: {len(allBrishes)}"
+    log = f"{ip} - cmd: {cmd}, session: {session}, stdin: {stdin[0:100]}, brishes: {len(brishes)}, allBrishes: {len(allBrishes)}"
     nolog or logger.info(log)
     first_seen and brish.z("tsend -- {os.environ.get('tlogs')} {log}")
 
