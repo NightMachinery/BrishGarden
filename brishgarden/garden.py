@@ -66,8 +66,9 @@ def newBrish():
     )
 
 
-logger.info("Initializing brishes ...")
-brishes = [newBrish() for i in range(6)] # @todo2 make this customizable
+brishes_n = 8 # @todo2 make this customizable
+logger.info(f"Initializing {brishes_n} brishes ...")
+brishes = [newBrish() for i in range(brishes_n)]
 allBrishes = {idx: i for idx, i in enumerate(brishes)}
 
 
