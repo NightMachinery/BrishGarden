@@ -40,10 +40,15 @@ settings = Settings()
 
 app = FastAPI(openapi_url=settings.openapi_url)
 logger = logging.getLogger("uvicorn")  # alt: from uvicorn.config import logger
+isDbg = os.environ.get("BRISHGARDEN_DEBUGME", False) # we can't reuse 'DEBUGME' or it will pollute all the brishes
+if isDbg:
+    logger.info("Debug mode enabled")
 
 
 class EndpointFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
+        if isDbg:
+            return True
         try:
             # print(record.__dict__)
 
@@ -62,7 +67,8 @@ seenIPs = {"127.0.0.1", brish.z("myip").out.strip()}
 
 def newBrish():
     return brish.Brish(
-        boot_cmd="export GARDEN_ZSH=y ; mkdir -p ~/tmp/garden/ ; cd ~/tmp/garden/ "
+        # FORCE_INTERACTIVE is set by tmuxnewsh2
+        boot_cmd="export GARDEN_ZSH=y ; unset FORCE_INTERACTIVE ; mkdir -p ~/tmp/garden/ ; cd ~/tmp/garden/ "
     )
 
 
@@ -111,7 +117,7 @@ def cmd_zsh(body: dict, request: Request):
         brish.z("tsend -- {os.environ.get('tlogs')} 'New IP seen by the Garden: '{ip}")
         seenIPs.add(ip)
 
-    nolog = ip == "127.0.0.1" and bool(
+    nolog = not isDbg and ip == "127.0.0.1" and bool(
         body.get("nolog", "")
     )  # Use /zsh/nolog/ to hide the access logs.
     session = body.get("session", "")
