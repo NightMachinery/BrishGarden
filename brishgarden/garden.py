@@ -59,13 +59,21 @@ class EndpointFilter(logging.Filter):
         if isDbg:
             return True
         try:
-            # print(record.__dict__)
 
             # msg: str = record.getMessage()
             # return msg.find("/zsh/nolog/") == -1
             return record.scope.get('path', '') != '/zsh/nolog/'
         except:
-            logger.warn(traceback.format_exc())
+            res = traceback.format_exc()
+            try:
+                res += f"\n\nLogRecord:\n{record.__dict__}"
+                ##
+                msg: str = record.getMessage()
+                res += f"\n\nmsg:\n{msg.__dict__}"
+            except:
+                pass
+
+            logger.warn(res)
             return True
 
 
