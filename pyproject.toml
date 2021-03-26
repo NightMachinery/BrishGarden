@@ -13,6 +13,11 @@ fastapi = {extras = ["all"], version = ">=0.60"}
 passlib = {extras = ["bcrypt", "argon2"], version = ">=1.7"}
 python-jose = {extras = ["cryptography"], version = ">=3.1"}
 brish = "*"
+##
+# did not fix `ModuleNotFoundError: No module named 'setuptools'` after all
+# setuptools = "<50"
+# `pi 'setuptools<50'`
+##
 
 [tool.poetry.scripts]
 brishgarden = 'brishgarden:main'
