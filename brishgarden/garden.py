@@ -137,7 +137,7 @@ def cmd_zsh(body: dict, request: Request):
     )  # Use /zsh/nolog/ to hide the access logs.
     log_level = int(body.get("log_level", 1))
     if isDbg:
-        log_level = 100
+        log_level = max(log_level, 100)
     ##
 
     log = f"{ip} - cmd: {cmd}, session: {session}, stdin: {stdin[0:100]}, brishes: {len(brishes)}, allBrishes: {len(allBrishes)}"
@@ -177,11 +177,15 @@ def cmd_zsh(body: dict, request: Request):
         myBrish = brishes.pop()
     ##
     res: CmdResult
-    if json_output == 0:
-        # we need to output a single string, so we can't need to put stderr and stdout together
-        res = myBrish.z("{{ eval {cmd} }} 2>&1", fork=False, cmd_stdin=stdin)
-    else:
-        res = myBrish.send_cmd(cmd, fork=False, cmd_stdin=stdin)
+    try:
+        if json_output == 0:
+            # we need to output a single string, so we can't need to put stderr and stdout together
+            res = myBrish.z("{{ eval {cmd} }} 2>&1", fork=False, cmd_stdin=stdin)
+        else:
+            res = myBrish.send_cmd(cmd, fork=False, cmd_stdin=stdin)
+    except:
+        res = CmdResult(9000, "", traceback.format_exc(), cmd, stdin)
+        log_level = max(log_level, 101)
 
     session or brishes.append(myBrish)
     ##
@@ -189,7 +193,7 @@ def cmd_zsh(body: dict, request: Request):
         if log_level >= 1:
             nolog or logger.warn(f"Command failed:\n{res.longstr}")
             if log_level >= 2:
-                zn("""isLocal && { tts-glados1-cached "A command has failed." ; bello } """)
+                zn("""isLocal && {{ tts-glados1-cached "A command has failed." ; bello }} """)
 
     if json_output == 0:
         return Response(content=res.outerr, media_type="text/plain")
