@@ -62,14 +62,18 @@ class EndpointFilter(logging.Filter):
 
             # msg: str = record.getMessage()
             # return msg.find("/zsh/nolog/") == -1
-            return record.scope.get('path', '') != '/zsh/nolog/'
+            if hasattr(record, "scope"):
+                return record.scope.get('path', '') != '/zsh/nolog/'
+            else:
+                return not (record.args[2] in ('/zsh/nolog/', '/api/v1/zsh/nolog/'))
         except:
             res = traceback.format_exc()
             try:
                 res += f"\n\nLogRecord:\n{record.__dict__}"
                 ##
                 msg: str = record.getMessage()
-                res += f"\n\nmsg:\n{msg.__dict__}"
+                res += f"\n\nmsg:\n{msg}"
+                res += f"\n{msg.__dict__}"
             except:
                 pass
 
