@@ -1,10 +1,10 @@
 import logging, os, time
 import brish
 from brish import CmdResult, z, zp
-def zn(*a, **kw):
+def zn(*a, getframe=3, **kw):
     # runs my personal commands
     if os.environ.get("NIGHTDIR"):
-        return z(*a, **kw)
+        return z(*a, **kw, getframe=getframe)
     else:
         return None
 
