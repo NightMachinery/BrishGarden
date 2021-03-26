@@ -56,12 +56,14 @@ if isDbg:
 
 class EndpointFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
-        if isDbg:
-            return True
         try:
-
+            if isDbg:
+                # logger.info(f"LogRecord:\n{record.__dict__}")
+                return True
+            ##
             # msg: str = record.getMessage()
             # return msg.find("/zsh/nolog/") == -1
+            ##
             if hasattr(record, "scope"):
                 return record.scope.get('path', '') != '/zsh/nolog/'
             else:
