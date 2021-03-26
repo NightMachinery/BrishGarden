@@ -1,4 +1,13 @@
-import logging, os, time, brish
+import logging, os, time
+import brish
+from brish import CmdResult, z, zp
+def zn(*a, **kw):
+    # runs my personal commands
+    if os.environ.get("NIGHTDIR"):
+        return z(*a, **kw)
+    else:
+        return None
+
 import traceback
 import re
 from typing import Optional
@@ -62,7 +71,8 @@ class EndpointFilter(logging.Filter):
 
 logging.getLogger("uvicorn.access").addFilter(EndpointFilter())
 # Our usage of internal zsh APIs will fail gracefully on foreign systems.
-seenIPs = {"127.0.0.1", brish.z("myip").out.strip()}
+myip = zn("myip")
+seenIPs = {"127.0.0.1", myip.out.strip() if myip else ""}
 
 
 def newBrish():
@@ -114,20 +124,25 @@ def cmd_zsh(body: dict, request: Request):
         first_seen = True
         logger.warn(f"New IP seen: {ip}")
         # We log the IP separately, to be sure that an injection attack can't stop the message.
-        brish.z("tsend -- {os.environ.get('tlogs')} 'New IP seen by the Garden: '{ip}")
+        zn("tsend -- {os.environ.get('tlogs')} 'New IP seen by the Garden: '{ip}")
         seenIPs.add(ip)
 
-    nolog = not isDbg and ip == "127.0.0.1" and bool(
-        body.get("nolog", "")
-    )  # Use /zsh/nolog/ to hide the access logs.
     session = body.get("session", "")
     cmd = body.get("cmd", "")
     stdin = body.get("stdin", "")
-    verbose = int(body.get("verbose", 0))
+    json_output = int(body.get("json_output", body.get("verbose", 0))) # old API had this named 'verbose'
+    ##
+    nolog = not isDbg and ip == "127.0.0.1" and bool(
+        body.get("nolog", "")
+    )  # Use /zsh/nolog/ to hide the access logs.
+    log_level = int(body.get("log_level", 1))
+    if isDbg:
+        log_level = 100
+    ##
 
     log = f"{ip} - cmd: {cmd}, session: {session}, stdin: {stdin[0:100]}, brishes: {len(brishes)}, allBrishes: {len(allBrishes)}"
     nolog or logger.info(log)
-    first_seen and brish.z("tsend -- {os.environ.get('tlogs')} {log}")
+    first_seen and zn("tsend -- {os.environ.get('tlogs')} {log}")
 
     if cmd == "":
         return Response(content="Empty command received.", media_type="text/plain")
@@ -141,7 +156,7 @@ def cmd_zsh(body: dict, request: Request):
             for b in allBrishes.values():
                 res = b.send_cmd(magic_exp, fork=False, cmd_stdin=stdin)
                 logger.info(res.longstr)
-                if verbose == 1:
+                if log_level >= 2:
                     log += f"\n{res.longstr}"
         else:
             log += "\nUnknown magic!"
@@ -161,13 +176,22 @@ def cmd_zsh(body: dict, request: Request):
             time.sleep(1)
         myBrish = brishes.pop()
     ##
-    if verbose == 0:
+    res: CmdResult
+    if json_output == 0:
+        # we need to output a single string, so we can't need to put stderr and stdout together
         res = myBrish.z("{{ eval {cmd} }} 2>&1", fork=False, cmd_stdin=stdin)
     else:
         res = myBrish.send_cmd(cmd, fork=False, cmd_stdin=stdin)
-    ##
+
     session or brishes.append(myBrish)
-    if verbose == 0:
+    ##
+    if res.retcode != 0:
+        if log_level >= 1:
+            nolog or logger.warn(f"Command failed:\n{res.longstr}")
+            if log_level >= 2:
+                zn("""tts-glados1-cached "A command has failed." ; bello """)
+
+    if json_output == 0:
         return Response(content=res.outerr, media_type="text/plain")
     else:
         return {
