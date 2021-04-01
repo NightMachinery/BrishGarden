@@ -207,7 +207,7 @@ def cmd_zsh(body: dict, request: Request):
         if log_level >= 1:
             nolog or logger.warn(f"Command failed:\n{res.longstr}")
             if log_level >= 2:
-                zn("""isLocal && {{ tts-glados1-cached "A command has failed." ; bello }} """)
+                zn("""isLocal && {{ tts-glados1-cached "A command has failed." ; bello }} &>/dev/null </dev/null &""")
 
     if json_output == 0:
         return Response(content=res.outerr, media_type="text/plain")
