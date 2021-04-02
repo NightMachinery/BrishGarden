@@ -104,7 +104,7 @@ except:
 logger.info(f"Initializing {brishes_n} brishes ...")
 brishes = [newBrish() for i in range(brishes_n)]
 allBrishes = {idx: i for idx, i in enumerate(brishes)}
-
+zn("bell-sc2-nav_online")
 
 @app.get("/")
 def read_root():
@@ -210,7 +210,7 @@ def cmd_zsh(body: dict, request: Request):
     if res.retcode != 0:
         if log_level >= 1:
             nolog or logger.warn(f"Command failed:\n{res.longstr}")
-            if log_level >= 2:
+            if log_level >= 1:
                 zn("""isLocal && {{ tts-glados1-cached "A command has failed." ; bello }} &>/dev/null </dev/null &""")
 
     if json_output == 0:
