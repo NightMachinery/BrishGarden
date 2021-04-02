@@ -1,3 +1,6 @@
 #+TITLE: Readme
 
 A REST HTTP API for running zsh code, built on top of =Brish=.
+
+* environment variables
+** =BRISHGARDEN_N= sets the number of Brishes started by default

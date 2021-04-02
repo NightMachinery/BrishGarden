@@ -95,8 +95,12 @@ def newBrish():
         boot_cmd="export GARDEN_ZSH=y ; unset FORCE_INTERACTIVE ; mkdir -p ~/tmp/garden/ ; cd ~/tmp/garden/ "
     )
 
+brishes_n_default = 6
+try:
+    brishes_n = int(os.environ.get("BRISHGARDEN_N", brishes_n_default))
+except:
+    brishes_n = brishes_n_default
 
-brishes_n = 8 # @todo2 make this customizable
 logger.info(f"Initializing {brishes_n} brishes ...")
 brishes = [newBrish() for i in range(brishes_n)]
 allBrishes = {idx: i for idx, i in enumerate(brishes)}
