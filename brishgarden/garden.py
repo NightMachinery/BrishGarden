@@ -17,6 +17,7 @@ def zn(*a, getframe=3, **kw):
 import traceback
 import re
 from typing import Optional
+from collections.abc import Iterable
 
 from fastapi import FastAPI, Response, Request
 from pydantic import BaseSettings
@@ -131,21 +132,35 @@ brish_server = None
 
 def brish_server_cleanup(brish_server):
     if brish_server:
-        brish_server.cleanup()
+        if isinstance(brish_server, Iterable):
+            for b in brish_server:
+                b.cleanup()
+        else:
+            brish_server.cleanup()
 
 
-def init_brishes():
-    global brish_server, brishes
+def init_brishes(erase_sessions=True):
+    global brish_server, brishes, allBrishes
 
-    executor.submit(lambda: brish_server_cleanup(brish_server))
-    # https://docs.python.org/3/library/concurrent.futures.html
+    if erase_sessions:
+        if allBrishes:
+            executor.submit(lambda: brish_server_cleanup(allBrishes.values()))
+            # https://docs.python.org/3/library/concurrent.futures.html
+    else:
+        executor.submit(lambda: brish_server_cleanup(brish_server))
 
     brish_server = newBrish(server_count=brishes_n)
     brishes = [i for i in range(brishes_n)]
+    new_brishes = {i: (brish_server, i) for i in range(brishes_n)}
+    if erase_sessions:
+        allBrishes = new_brishes
+    else:
+        allBrishes.update(new_brishes)
 
 
+allBrishes = None
+brish_server = None
 init_brishes()
-allBrishes = {i: (brish_server, i) for i in range(brishes_n)}
 zn("bell-sc2-nav_online")
 
 
