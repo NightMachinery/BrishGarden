@@ -1,12 +1,18 @@
 import logging, os, time
+import functools
+from concurrent.futures import ThreadPoolExecutor
+import asyncio
 import brish
 from brish import CmdResult, z, zp
+
+
 def zn(*a, getframe=3, **kw):
     # runs my personal commands
     if os.environ.get("NIGHTDIR"):
         return z(*a, **kw, getframe=getframe)
     else:
         return None
+
 
 import traceback
 import re
@@ -38,6 +44,16 @@ def embed2():
 
 
 ##
+def force_async(f):
+    @functools.wraps(f)
+    def inner(*args, **kwargs):
+        loop = asyncio.get_running_loop()
+        return loop.run_in_executor(None, lambda: f(*args, **kwargs))
+
+    return inner
+
+
+##
 
 
 class Settings(BaseSettings):
@@ -49,7 +65,9 @@ settings = Settings()
 
 app = FastAPI(openapi_url=settings.openapi_url)
 logger = logging.getLogger("uvicorn")  # alt: from uvicorn.config import logger
-isDbg = os.environ.get("BRISHGARDEN_DEBUGME", False) # we can't reuse 'DEBUGME' or it will pollute all the brishes
+isDbg = os.environ.get(
+    "BRISHGARDEN_DEBUGME", False
+)  # we can't reuse 'DEBUGME' or it will pollute all the brishes
 if isDbg:
     logger.info("Debug mode enabled")
 
@@ -65,9 +83,9 @@ class EndpointFilter(logging.Filter):
             # return msg.find("/zsh/nolog/") == -1
             ##
             if hasattr(record, "scope"):
-                return record.scope.get('path', '') != '/zsh/nolog/'
+                return record.scope.get("path", "") != "/zsh/nolog/"
             else:
-                return not (record.args[2] in ('/zsh/nolog/', '/api/v1/zsh/nolog/'))
+                return not (record.args[2] in ("/zsh/nolog/", "/api/v1/zsh/nolog/"))
         except:
             res = traceback.format_exc()
             try:
@@ -89,22 +107,47 @@ myip = zn("myip")
 seenIPs = {"127.0.0.1", myip.out.strip() if myip else ""}
 
 
-def newBrish():
+def newBrish(**kwargs):
     return brish.Brish(
         # FORCE_INTERACTIVE is set by tmuxnewsh2
-        boot_cmd="export GARDEN_ZSH=y ; unset FORCE_INTERACTIVE ; mkdir -p ~/tmp/garden/ ; cd ~/tmp/garden/ "
+        boot_cmd="export GARDEN_ZSH=y ; unset FORCE_INTERACTIVE ; mkdir -p ~/tmp/garden/ ; cd ~/tmp/garden/ ",
+        **kwargs,
     )
 
-brishes_n_default = 6
+
+brishes_n_default = 16
 try:
     brishes_n = int(os.environ.get("BRISHGARDEN_N", brishes_n_default))
 except:
     brishes_n = brishes_n_default
 
+loop = asyncio.get_running_loop()
+executor = ThreadPoolExecutor(max_workers=(brishes_n + 16))
+loop.set_default_executor(executor)
+
 logger.info(f"Initializing {brishes_n} brishes ...")
-brishes = [newBrish() for i in range(brishes_n)]
-allBrishes = {idx: i for idx, i in enumerate(brishes)}
+brish_server = None
+
+
+def brish_server_cleanup(brish_server):
+    if brish_server:
+        brish_server.cleanup()
+
+
+def init_brishes():
+    global brish_server, brishes
+
+    executor.submit(lambda: brish_server_cleanup(brish_server))
+    # https://docs.python.org/3/library/concurrent.futures.html
+
+    brish_server = newBrish(server_count=brishes_n)
+    brishes = [i for i in range(brishes_n)]
+
+
+init_brishes()
+allBrishes = {i: (brish_server, i) for i in range(brishes_n)}
 zn("bell-sc2-nav_online")
+
 
 @app.get("/")
 def read_root():
@@ -148,10 +191,12 @@ def cmd_zsh(body: dict, request: Request):
     session = body.get("session", "")
     cmd = body.get("cmd", "")
     stdin = body.get("stdin", "")
-    json_output = int(body.get("json_output", body.get("verbose", 0))) # old API had this named 'verbose'
+    json_output = int(
+        body.get("json_output", body.get("verbose", 0))
+    )  # old API had this named 'verbose'
     ##
-    nolog = not isDbg and ip == "127.0.0.1" and bool(
-        body.get("nolog", "")
+    nolog = (
+        not isDbg and ip == "127.0.0.1" and bool(body.get("nolog", ""))
     )  # Use /zsh/nolog/ to hide the access logs.
     log_level = int(body.get("log_level", 1))
     if isDbg:
@@ -171,11 +216,7 @@ def cmd_zsh(body: dict, request: Request):
         log = f"Magic received: {magic_head}"
         logger.info(log)
         if magic_head == "ALL":
-            for b in allBrishes.values():
-                res = b.send_cmd(magic_exp, fork=False, cmd_stdin=stdin)
-                logger.info(res.longstr)
-                if log_level >= 2:
-                    log += f"\n{res.longstr}"
+            init_brishes()
         else:
             log += "\nUnknown magic!"
             logger.warn("Unknown magic!")
@@ -184,34 +225,44 @@ def cmd_zsh(body: dict, request: Request):
 
     if session:
         # @design garbage collect
-        myBrish = allBrishes.get(session, None)
+        myBrish, server_index = allBrishes.get(session, (None, None))
         if not myBrish:
-            myBrish = allBrishes.setdefault(
-                session, newBrish()
+            myBrish, server_index = allBrishes.setdefault(
+                session, (newBrish(server_count=1), 0)
             )  # is atomic https://bugs.python.org/issue13521#:~:text=setdefault()%20was%20intended%20to,()%20which%20can%20call%20arbitrary
     else:
         while len(brishes) <= 0:
             time.sleep(1)
-        myBrish = brishes.pop()
+        myBrish = brish_server
+        server_index = brishes.pop()
     ##
     res: CmdResult
     try:
         if json_output == 0:
             # we need to output a single string, so we can't need to put stderr and stdout together
-            res = myBrish.z("{{ eval {cmd} }} 2>&1", fork=False, cmd_stdin=stdin)
+            res = myBrish.z(
+                "{{ eval {cmd} }} 2>&1",
+                fork=False,
+                cmd_stdin=stdin,
+                server_index=server_index,
+            )
         else:
-            res = myBrish.send_cmd(cmd, fork=False, cmd_stdin=stdin)
+            res = myBrish.send_cmd(
+                cmd, fork=False, cmd_stdin=stdin, server_index=server_index
+            )
     except:
         res = CmdResult(9000, "", traceback.format_exc(), cmd, stdin)
         log_level = max(log_level, 101)
 
-    session or brishes.append(myBrish)
+    session or brishes.append(server_index)
     ##
     if res.retcode != 0:
         if log_level >= 1:
             nolog or logger.warn(f"Command failed:\n{res.longstr}")
             if log_level >= 1:
-                zn("""isLocal && {{ tts-glados1-cached "A command has failed." ; bello }} &>/dev/null </dev/null &""")
+                zn(
+                    """isLocal && {{ tts-glados1-cached "A command has failed." ; bello }} &>/dev/null </dev/null &"""
+                )
 
     if json_output == 0:
         return Response(content=res.outerr, media_type="text/plain")
