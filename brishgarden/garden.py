@@ -98,7 +98,7 @@ class EndpointFilter(logging.Filter):
             except:
                 pass
 
-            logger.warn(res)
+            logger.warning(res)
             return True
 
 
@@ -131,12 +131,19 @@ brish_server = None
 
 
 def brish_server_cleanup(brish_server):
-    if brish_server:
-        if isinstance(brish_server, Iterable):
-            for b in brish_server:
-                b.cleanup()
-        else:
-            brish_server.cleanup()
+    try:
+        if brish_server:
+            if isinstance(brish_server, Iterable):
+                for b, _ in brish_server:
+                    try:
+                        b.cleanup()
+                    except:
+                        logger.error(traceback.format_exc())
+            else:
+                brish_server.cleanup()
+    except:
+        logger.error(traceback.format_exc())
+
 
 
 def init_brishes(erase_sessions=True):
@@ -198,7 +205,7 @@ def cmd_zsh(body: dict, request: Request):
     ip = request.client.host
     if not (ip in seenIPs):
         first_seen = True
-        logger.warn(f"New IP seen: {ip}")
+        logger.warning(f"New IP seen: {ip}")
         # We log the IP separately, to be sure that an injection attack can't stop the message.
         zn("tsend -- {os.environ.get('tlogs')} 'New IP seen by the Garden: '{ip}")
         seenIPs.add(ip)
@@ -234,7 +241,7 @@ def cmd_zsh(body: dict, request: Request):
             init_brishes()
         else:
             log += "\nUnknown magic!"
-            logger.warn("Unknown magic!")
+            logger.warning("Unknown magic!")
 
         return Response(content=log, media_type="text/plain")
 
@@ -273,7 +280,7 @@ def cmd_zsh(body: dict, request: Request):
     ##
     if res.retcode != 0:
         if log_level >= 1:
-            nolog or logger.warn(f"Command failed:\n{res.longstr}")
+            nolog or logger.warning(f"Command failed:\n{res.longstr}")
             if log_level >= 1:
                 zn(
                     """isLocal && {{ tts-glados1-cached "A command has failed." ; bello }} &>/dev/null </dev/null &"""
