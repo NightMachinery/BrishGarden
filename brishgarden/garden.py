@@ -145,14 +145,10 @@ def brish_server_cleanup(brish_server):
         logger.error(traceback.format_exc())
 
 
-
-# init_in_progress = False
 def init_brishes(erase_sessions=True):
     global brish_server, brishes, allBrishes
 
-    # global init_in_progress
-    # init_in_progress = True
-
+    brishes = []  # helps avoid UninitializedBrishException
     if erase_sessions:
         if allBrishes:
             executor.submit(lambda: brish_server_cleanup(allBrishes.values()))
@@ -168,7 +164,6 @@ def init_brishes(erase_sessions=True):
     else:
         allBrishes.update(new_brishes)
 
-    # init_in_progress = False
 
 allBrishes = None
 brish_server = None
@@ -251,10 +246,6 @@ def cmd_zsh(body: dict, request: Request):
         return Response(content=log, media_type="text/plain")
 
     while True:
-        ###
-        # while init_in_progress:
-        #     time.sleep(1)
-
         if session:
             # @design garbage collect
             myBrish, server_index = allBrishes.get(session, (None, None))
@@ -292,9 +283,12 @@ def cmd_zsh(body: dict, request: Request):
             res = CmdResult(9000, "", traceback.format_exc(), cmd, stdin)
             log_level = max(log_level, 101)
 
-        session or brishes.append(server_index)
+        if not session and not (server_index in brishes):
+            # duplicate brishes might be added here because of race conditions, but as brishes have their own locking, this doesn't matter, as we garbage-collect the dups here
+            brishes.append(server_index)
+
         break
-    ##
+    ###
     if res.retcode != 0:
         if log_level >= 1:
             nolog or logger.warning(f"Command failed:\n{res.longstr}")
