@@ -3,7 +3,7 @@ import functools
 from concurrent.futures import ThreadPoolExecutor
 import asyncio
 import brish
-from brish import CmdResult, z, zp
+from brish import CmdResult, z, zp, UninitializedBrishException
 
 
 def zn(*a, getframe=3, **kw):
@@ -146,8 +146,12 @@ def brish_server_cleanup(brish_server):
 
 
 
+# init_in_progress = False
 def init_brishes(erase_sessions=True):
     global brish_server, brishes, allBrishes
+
+    # global init_in_progress
+    # init_in_progress = True
 
     if erase_sessions:
         if allBrishes:
@@ -164,6 +168,7 @@ def init_brishes(erase_sessions=True):
     else:
         allBrishes.update(new_brishes)
 
+    # init_in_progress = False
 
 allBrishes = None
 brish_server = None
@@ -245,38 +250,50 @@ def cmd_zsh(body: dict, request: Request):
 
         return Response(content=log, media_type="text/plain")
 
-    if session:
-        # @design garbage collect
-        myBrish, server_index = allBrishes.get(session, (None, None))
-        if not myBrish:
-            myBrish, server_index = allBrishes.setdefault(
-                session, (newBrish(server_count=1), 0)
-            )  # is atomic https://bugs.python.org/issue13521#:~:text=setdefault()%20was%20intended%20to,()%20which%20can%20call%20arbitrary
-    else:
-        while len(brishes) <= 0:
-            time.sleep(1)
-        myBrish = brish_server
-        server_index = brishes.pop()
-    ##
-    res: CmdResult
-    try:
-        if json_output == 0:
-            # we need to output a single string, so we can't need to put stderr and stdout together
-            res = myBrish.z(
-                "{{ eval {cmd} }} 2>&1",
-                fork=False,
-                cmd_stdin=stdin,
-                server_index=server_index,
-            )
-        else:
-            res = myBrish.send_cmd(
-                cmd, fork=False, cmd_stdin=stdin, server_index=server_index
-            )
-    except:
-        res = CmdResult(9000, "", traceback.format_exc(), cmd, stdin)
-        log_level = max(log_level, 101)
+    while True:
+        ###
+        # while init_in_progress:
+        #     time.sleep(1)
 
-    session or brishes.append(server_index)
+        if session:
+            # @design garbage collect
+            myBrish, server_index = allBrishes.get(session, (None, None))
+            if not myBrish:
+                myBrish, server_index = allBrishes.setdefault(
+                    session, (newBrish(server_count=1), 0)
+                )  # is atomic https://bugs.python.org/issue13521#:~:text=setdefault()%20was%20intended%20to,()%20which%20can%20call%20arbitrary
+        else:
+            while len(brishes) <= 0:
+                time.sleep(1)
+            myBrish = brish_server
+            server_index = brishes.pop()
+        ###
+        res: CmdResult
+        try:
+            if json_output == 0:
+                # we need to output a single string, so we can't need to put stderr and stdout together
+                res = myBrish.z(
+                    "{{ eval {cmd} }} 2>&1",
+                    fork=False,
+                    cmd_stdin=stdin,
+                    server_index=server_index,
+                )
+            else:
+                res = myBrish.send_cmd(
+                    cmd, fork=False, cmd_stdin=stdin, server_index=server_index
+                )
+        except UninitializedBrishException:
+            if log_level >= 2:
+                logger.info("Encountered UninitializedBrishException")
+
+            time.sleep(1)
+            continue
+        except:
+            res = CmdResult(9000, "", traceback.format_exc(), cmd, stdin)
+            log_level = max(log_level, 101)
+
+        session or brishes.append(server_index)
+        break
     ##
     if res.retcode != 0:
         if log_level >= 1:
