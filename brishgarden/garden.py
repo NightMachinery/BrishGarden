@@ -168,7 +168,7 @@ def init_brishes(erase_sessions=True):
 allBrishes = None
 brish_server = None
 init_brishes()
-zn("bell-sc2-nav_online")
+zn("bell_awaysh=no bell-sc2-nav_online")
 
 
 @app.get("/")
@@ -199,116 +199,119 @@ pattern_magic = re.compile(r"(?im)^%GARDEN_(\S+)\s+((?:.|\n)*)$")
 @app.post("/zsh/")
 @app.post("/zsh/nolog/")
 def cmd_zsh(body: dict, request: Request):
-    # GET Method: cmd: str, verbose: Optional[int] = 0
-    # body: cmd [verbose: int=0,1] [stdin: str]
-    first_seen = False
-    ip = request.client.host
-    if not (ip in seenIPs):
-        first_seen = True
-        logger.warning(f"New IP seen: {ip}")
-        # We log the IP separately, to be sure that an injection attack can't stop the message.
-        zn("tsend -- {os.environ.get('tlogs')} 'New IP seen by the Garden: '{ip}")
-        seenIPs.add(ip)
+    try:
+        # GET Method: cmd: str, verbose: Optional[int] = 0
+        # body: cmd [verbose: int=0,1] [stdin: str]
+        first_seen = False
+        ip = request.client.host
+        if not (ip in seenIPs):
+            first_seen = True
+            logger.warning(f"New IP seen: {ip}")
+            # We log the IP separately, to be sure that an injection attack can't stop the message.
+            zn("tsend -- {os.environ.get('tlogs')} 'New IP seen by the Garden: '{ip}")
+            seenIPs.add(ip)
 
-    session = body.get("session", "")
-    cmd = body.get("cmd", "")
-    stdin = body.get("stdin", "")
-    json_output = int(
-        body.get("json_output", body.get("verbose", 0))
-    )  # old API had this named 'verbose'
-    ##
-    nolog = (
-        not isDbg and ip == "127.0.0.1" and bool(body.get("nolog", ""))
-    )  # Use /zsh/nolog/ to hide the access logs.
-    log_level = int(body.get("log_level", 1))
-    if isDbg:
-        log_level = max(log_level, 100)
-    ##
+        session = body.get("session", "")
+        cmd = body.get("cmd", "")
+        stdin = body.get("stdin", "")
+        json_output = int(
+            body.get("json_output", body.get("verbose", 0))
+        )  # old API had this named 'verbose'
+        ##
+        nolog = (
+            not isDbg and ip == "127.0.0.1" and bool(body.get("nolog", ""))
+        )  # Use /zsh/nolog/ to hide the access logs.
+        log_level = int(body.get("log_level", 1))
+        if isDbg:
+            log_level = max(log_level, 100)
+        ##
 
-    log = f"{ip} - cmd: {cmd}, session: {session}, stdin: {stdin[0:100]}, brishes: {len(brishes)}, allBrishes: {len(allBrishes)}"
-    nolog or logger.info(log)
-    first_seen and zn("tsend -- {os.environ.get('tlogs')} {log}")
+        log = f"{ip} - cmd: {cmd}, session: {session}, stdin: {stdin[0:100]}, brishes: {len(brishes)}, allBrishes: {len(allBrishes)}"
+        nolog or logger.info(log)
+        first_seen and zn("tsend -- {os.environ.get('tlogs')} {log}")
 
-    if cmd == "":
-        return Response(content="Empty command received.", media_type="text/plain")
-    magic_matches = pattern_magic.match(cmd)
-    if magic_matches is not None:
-        magic_head = magic_matches.group(1)
-        magic_exp = magic_matches.group(2)
-        log = f"Magic received: {magic_head}"
-        logger.info(log)
-        if magic_head == "ALL":
-            init_brishes()
-        else:
-            log += "\nUnknown magic!"
-            logger.warning("Unknown magic!")
-
-        return Response(content=log, media_type="text/plain")
-
-    while True:
-        if session:
-            # @design garbage collect
-            myBrish, server_index = allBrishes.get(session, (None, None))
-            if not myBrish:
-                myBrish, server_index = allBrishes.setdefault(
-                    session, (newBrish(server_count=1), 0)
-                )  # is atomic https://bugs.python.org/issue13521#:~:text=setdefault()%20was%20intended%20to,()%20which%20can%20call%20arbitrary
-        else:
-            while len(brishes) <= 0:
-                time.sleep(1)
-            myBrish = brish_server
-            server_index = brishes.pop()
-        ###
-        res: CmdResult
-        try:
-            if json_output == 0:
-                # we need to output a single string, so we can't need to put stderr and stdout together
-                res = myBrish.z(
-                    "{{ eval {cmd} }} 2>&1",
-                    fork=False,
-                    cmd_stdin=stdin,
-                    server_index=server_index,
-                )
+        if cmd == "":
+            return Response(content="Empty command received.", media_type="text/plain")
+        magic_matches = pattern_magic.match(cmd)
+        if magic_matches is not None:
+            magic_head = magic_matches.group(1)
+            magic_exp = magic_matches.group(2)
+            log = f"Magic received: {magic_head}"
+            logger.info(log)
+            if magic_head == "ALL":
+                init_brishes()
             else:
-                res = myBrish.send_cmd(
-                    cmd, fork=False, cmd_stdin=stdin, server_index=server_index
-                )
-        except UninitializedBrishException:
-            if log_level >= 2:
-                logger.info("Encountered UninitializedBrishException")
+                log += "\nUnknown magic!"
+                logger.warning("Unknown magic!")
 
-            time.sleep(1)
-            continue
-        except:
-            res = CmdResult(9000, "", traceback.format_exc(), cmd, stdin)
-            log_level = max(log_level, 101)
+            return Response(content=log, media_type="text/plain")
 
-        if not session and not (server_index in brishes):
-            # duplicate brishes might be added here because of race conditions, but as brishes have their own locking, this doesn't matter, as we garbage-collect the dups here
-            brishes.append(server_index)
+        while True:
+            if session:
+                # @design garbage collect
+                myBrish, server_index = allBrishes.get(session, (None, None))
+                if not myBrish:
+                    myBrish, server_index = allBrishes.setdefault(
+                        session, (newBrish(server_count=1), 0)
+                    )  # is atomic https://bugs.python.org/issue13521#:~:text=setdefault()%20was%20intended%20to,()%20which%20can%20call%20arbitrary
+            else:
+                while len(brishes) <= 0:
+                    time.sleep(1)
+                myBrish = brish_server
+                server_index = brishes.pop()
+            ###
+            res: CmdResult
+            try:
+                if json_output == 0:
+                    # we need to output a single string, so we can't need to put stderr and stdout together
+                    res = myBrish.z(
+                        "{{ eval {cmd} }} 2>&1",
+                        fork=False,
+                        cmd_stdin=stdin,
+                        server_index=server_index,
+                    )
+                else:
+                    res = myBrish.send_cmd(
+                        cmd, fork=False, cmd_stdin=stdin, server_index=server_index
+                    )
+            except UninitializedBrishException:
+                if log_level >= 2:
+                    logger.info("Encountered UninitializedBrishException")
 
-        break
-    ###
-    if res.retcode != 0:
-        if log_level >= 1:
-            nolog or logger.warning(f"Command failed:\n{res.longstr}")
+                time.sleep(1)
+                continue
+            except:
+                res = CmdResult(9000, "", traceback.format_exc(), cmd, stdin)
+                log_level = max(log_level, 101)
+
+            if not session and not (server_index in brishes):
+                # duplicate brishes might be added here because of race conditions, but as brishes have their own locking, this doesn't matter, as we garbage-collect the dups here
+                brishes.append(server_index)
+
+            break
+        ###
+        if res.retcode != 0:
             if log_level >= 1:
-                zn(
-                    """isLocal && {{ tts-glados1-cached "A command has failed." ; bello }} &>/dev/null </dev/null &"""
-                )
+                nolog or logger.warning(f"Command failed:\n{res.longstr}")
+                if log_level >= 1:
+                    zn(
+                        """isLocal && {{ tts-glados1-cached "A command has failed." ; bello }} &>/dev/null </dev/null &"""
+                    )
 
-    if json_output == 0:
-        return Response(content=res.outerr, media_type="text/plain")
-    else:
-        return {
-            "cmd": cmd,
-            "session": session,
-            "brishes": len(brishes),
-            "allBrishes": len(allBrishes),
-            "out": res.out,
-            "err": res.err,
-            "retcode": res.retcode,
-        }
+        if json_output == 0:
+            return Response(content=res.outerr, media_type="text/plain")
+        else:
+            return {
+                "cmd": cmd,
+                "session": session,
+                "brishes": len(brishes),
+                "allBrishes": len(allBrishes),
+                "out": res.out,
+                "err": res.err,
+                "retcode": res.retcode,
+            }
+    except:
+        log.warning(traceback.format_exc())
 
 
 # Old security scheme: (We now use Caddy's HTTP auth.)
