@@ -108,10 +108,10 @@ myip = zn("myip")
 seenIPs = {"127.0.0.1", myip.out.strip() if myip else ""}
 
 
-def newBrish(**kwargs):
+def newBrish(session='', **kwargs):
     return brish.Brish(
         # FORCE_INTERACTIVE is set by tmuxnewsh2
-        boot_cmd="export GARDEN_ZSH=y ; unset FORCE_INTERACTIVE ; mkdir -p ~/tmp/garden/ ; cd ~/tmp/garden/ ",
+        boot_cmd="export GARDEN_ZSH=y ; export GARDEN_SESSION={session} ; unset FORCE_INTERACTIVE ; mkdir -p ~/tmp/garden/ ; cd ~/tmp/garden/ ",
         **kwargs,
     )
 
@@ -252,7 +252,7 @@ def cmd_zsh(body: dict, request: Request):
                 myBrish, server_index = allBrishes.get(session, (None, None))
                 if not myBrish:
                     myBrish, server_index = allBrishes.setdefault(
-                        session, (newBrish(server_count=1), 0)
+                        session, (newBrish(session=session, server_count=1), 0)
                     )  # is atomic https://bugs.python.org/issue13521#:~:text=setdefault()%20was%20intended%20to,()%20which%20can%20call%20arbitrary
             else:
                 while len(brishes) <= 0:
