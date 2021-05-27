@@ -311,7 +311,7 @@ def cmd_zsh(body: dict, request: Request):
                 "retcode": res.retcode,
             }
     except:
-        log.warning(traceback.format_exc())
+        logger.warning(traceback.format_exc())
 
 
 # Old security scheme: (We now use Caddy's HTTP auth.)
