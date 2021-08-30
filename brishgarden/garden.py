@@ -168,7 +168,7 @@ def init_brishes(erase_sessions=True):
 allBrishes = None
 brish_server = None
 init_brishes()
-zn("bell_awaysh=no bell-sc2-nav_online")
+zn("bell_awaysh=no bell-sc2-nav_onlinei || true")
 
 
 @app.get("/")
@@ -295,7 +295,11 @@ def cmd_zsh(body: dict, request: Request):
                 nolog or logger.warning(f"Command failed:\n{res.longstr}")
                 if log_level >= 1:
                     zn(
-                        """isLocal && {{ tts-glados1-cached "A command has failed." ; bello }} &>/dev/null </dev/null &"""
+                        """
+                        if isMe && isLocal ; then
+                           {{ tts-glados1-cached "A command has failed." ; bello }} &>/dev/null </dev/null &
+                        fi
+                        """
                     )
 
         if json_output == 0:
