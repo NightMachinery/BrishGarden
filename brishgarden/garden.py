@@ -1,18 +1,11 @@
-import logging, os, time
-import functools
-from concurrent.futures import ThreadPoolExecutor
-import asyncio
+import logging
+import os
+import time
 import brish
-from brish import CmdResult, z, zp, UninitializedBrishException
-
-
-def zn(*a, getframe=3, **kw):
-    # runs my personal commands
-    if os.environ.get("NIGHTDIR"):
-        return z(*a, **kw, getframe=getframe)
-    else:
-        return None
-
+from brish import CmdResult, z, zp, UninitializedBrishException, zn
+from pynight.common_async import force_async, async_max_workers_set
+from pynight.common_fastapi import FastAPISettings, EndpointLoggingFilter1, request_path_get, check_ip
+from pynight.common_telegram import log_tlg
 
 import traceback
 import re
@@ -20,116 +13,37 @@ from typing import Optional
 from collections.abc import Iterable
 
 from fastapi import FastAPI, Response, Request
-from pydantic import BaseSettings
 
-##
-# ix_flag = False
-
-
-# def ix():
-#     global ix_flag
-#     if not ix_flag:
-#         import nest_asyncio
-
-#         nest_asyncio.apply()
-#         ix_flag = True
-
-
-def embed2():
-    # from IPython import embed
-    # ix()
-    # embed(using='asyncio')
-    # from ipydex import IPS, ip_syshook, ST, activate_ips_on_exception, dirsearch
-    # IPS()
-    print("None of these work at all with uvicorn's loop.")
-
-
-##
-def force_async(f):
-    @functools.wraps(f)
-    def inner(*args, **kwargs):
-        loop = asyncio.get_running_loop()
-        return loop.run_in_executor(None, lambda: f(*args, **kwargs))
-
-    return inner
-
-
-##
-
-
-class Settings(BaseSettings):
-    # disabling the docs
-    openapi_url: str = ""  # "/openapi.json"
-
-
-settings = Settings()
-
+settings = FastAPISettings()
 app = FastAPI(openapi_url=settings.openapi_url)
+
 logger = logging.getLogger("uvicorn")  # alt: from uvicorn.config import logger
+
 isDbg = os.environ.get(
     "BRISHGARDEN_DEBUGME", False
 )  # we can't reuse 'DEBUGME' or it will pollute all the brishes
 if isDbg:
     logger.info("Debug mode enabled")
 
-
-class EndpointFilter(logging.Filter):
-    def filter(self, record: logging.LogRecord) -> bool:
-        try:
-            if isDbg:
-                # logger.info(f"LogRecord:\n{record.__dict__}")
-                return True
-            ##
-            # msg: str = record.getMessage()
-            # return msg.find("/zsh/nolog/") == -1
-            ##
-            if hasattr(record, "scope"):
-                return record.scope.get("path", "") != "/zsh/nolog/"
-            else:
-                return not (record.args[2] in ("/zsh/nolog/", "/api/v1/zsh/nolog/"))
-        except:
-            res = traceback.format_exc()
-            try:
-                res += f"\n\nLogRecord:\n{record.__dict__}"
-                ##
-                msg: str = record.getMessage()
-                res += f"\n\nmsg:\n{msg}"
-                res += f"\n{msg.__dict__}"
-            except:
-                pass
-
-            logger.warning(res)
-            return True
-
-
-logging.getLogger("uvicorn.access").addFilter(EndpointFilter())
-# Our usage of internal zsh APIs will fail gracefully on foreign systems.
-myip = zn("myip")
-seenIPs = {"127.0.0.1", myip.out.strip() if myip else ""}
-
-
-def newBrish(session='', **kwargs):
-    return brish.Brish(
-        # FORCE_INTERACTIVE is set by tmuxnewsh2
-        boot_cmd="export GARDEN_ZSH=y ; export GARDEN_SESSION={session} ; unset FORCE_INTERACTIVE ; mkdir -p ~/tmp/garden/ ; cd ~/tmp/garden/ ",
-        **kwargs,
-    )
-
-
+skip_paths=("/zsh/nolog/", "/api/v1/zsh/nolog/")
+logging.getLogger("uvicorn.access").addFilter(EndpointLoggingFilter1(isDbg=isDbg, logger=logger, skip_paths=skip_paths))
+###
 brishes_n_default = 16
 try:
     brishes_n = int(os.environ.get("BRISHGARDEN_N", brishes_n_default))
 except:
     brishes_n = brishes_n_default
 
-loop = asyncio.get_running_loop()
-executor = ThreadPoolExecutor(max_workers=(brishes_n + 16))
-loop.set_default_executor(executor)
+executor = async_max_workers_set(brishes_n + 16)
+###
+def newBrish(session="", **kwargs):
+    return brish.Brish(
+        # FORCE_INTERACTIVE is set by tmuxnewsh2
+        boot_cmd="export GARDEN_ZSH=y ; export GARDEN_SESSION={session} ; unset FORCE_INTERACTIVE ; mkdir -p ~/tmp/garden/ ; cd ~/tmp/garden/ ",
+        **kwargs,
+    )
 
-logger.info(f"Initializing {brishes_n} brishes ...")
 brish_server = None
-
-
 def brish_server_cleanup(brish_server):
     try:
         if brish_server:
@@ -150,7 +64,7 @@ def init_brishes(erase_sessions=True):
 
     brishes = []  # helps avoid UninitializedBrishException
     if erase_sessions:
-        if allBrishes:
+        if allBrishes:  # @noflycheck
             executor.submit(lambda: brish_server_cleanup(allBrishes.values()))
             # https://docs.python.org/3/library/concurrent.futures.html
     else:
@@ -167,10 +81,11 @@ def init_brishes(erase_sessions=True):
 
 allBrishes = None
 brish_server = None
+logger.info(f"Initializing {brishes_n} brishes ...")
 init_brishes()
-zn("bell_awaysh=no bell-sc2-nav_onlinei || true")
+zn("bell_awaysh=no bell-sc2-nav_online || true")
 
-
+###
 @app.get("/")
 def read_root():
     return {"Hello": "World"}
@@ -191,10 +106,8 @@ async def get_req(request: Request):
 async def get_ip(request: Request):
     ans = request.client.host
     return Response(content=ans, media_type="text/plain")
-
-
-pattern_magic = re.compile(r"(?im)^%GARDEN_(\S+)\s+((?:.|\n)*)$")
-
+###
+pattern_magic = re.compile(r"(?im)^%GARDEN_(\S+)\s+((?:.|\n)*)$") # @duplicateCode/86da52eced14bf6baa394f50a9601812
 
 @app.post("/zsh/")
 @app.post("/zsh/nolog/")
@@ -202,14 +115,12 @@ def cmd_zsh(body: dict, request: Request):
     try:
         # GET Method: cmd: str, verbose: Optional[int] = 0
         # body: cmd [verbose: int=0,1] [stdin: str]
-        first_seen = False
-        ip = request.client.host
-        if not (ip in seenIPs):
-            first_seen = True
-            logger.warning(f"New IP seen: {ip}")
-            # We log the IP separately, to be sure that an injection attack can't stop the message.
-            zn("tsend -- {os.environ.get('tlogs')} 'New IP seen by the Garden: '{ip}")
-            seenIPs.add(ip)
+        ##
+        # print(body)
+        # print(request.__dict__)
+        ##
+        ip, first_seen = check_ip(request, logger=logger)
+        req_path = request_path_get(request)
 
         session = body.get("session", "")
         cmd = body.get("cmd", "")
@@ -219,8 +130,10 @@ def cmd_zsh(body: dict, request: Request):
         )  # old API had this named 'verbose'
         ##
         nolog = (
-            not isDbg and ip == "127.0.0.1" and bool(body.get("nolog", ""))
+            not isDbg and ip == "127.0.0.1" and
+            (bool(body.get("nolog", "")) or (req_path in skip_paths))
         )  # Use /zsh/nolog/ to hide the access logs.
+
         log_level = int(body.get("log_level", 1))
         if isDbg:
             log_level = max(log_level, 100)
@@ -228,7 +141,7 @@ def cmd_zsh(body: dict, request: Request):
 
         log = f"{ip} - cmd: {cmd}, session: {session}, stdin: {stdin[0:100]}, brishes: {len(brishes)}, allBrishes: {len(allBrishes)}"
         nolog or logger.info(log)
-        first_seen and zn("tsend -- {os.environ.get('tlogs')} {log}")
+        first_seen and log_tlg(log)
 
         if cmd == "":
             return Response(content="Empty command received.", media_type="text/plain")
@@ -318,5 +231,5 @@ def cmd_zsh(body: dict, request: Request):
         logger.warning(traceback.format_exc())
 
 
-# Old security scheme: (We now use Caddy's HTTP auth.)
+## Old security scheme: (We now use Caddy's HTTP auth.)
 # Use `pass: str`, hash it a lot along BRISHGARDEN_SALT, and compare to BRISHGARDEN_PASS. Abort if any of the two vars are empty. We probably need to answer the query right away for this security model to work, because hashing necessarily needs to be expensive.

@@ -6,33 +6,18 @@ authors = ["NightMachinary <rudiwillalwaysloveyou@gmail.com>"]
 license = "MIT"
 
 [tool.poetry.dependencies]
-python = ">=3.7"
+python = ">=3.7,<4.0"
 python-multipart = ">=0.0.5"
 # brish = {git = "https://github.com/NightMachinary/brish.git"}
 fastapi = {extras = ["all"], version = ">=0.60"}
 passlib = {extras = ["bcrypt", "argon2"], version = ">=1.7"}
 python-jose = {extras = ["cryptography"], version = ">=3.1"}
 brish = "*"
-##
-# did not fix `ModuleNotFoundError: No module named 'setuptools'` after all
-# setuptools = "<50"
-# `pi 'setuptools<50'`
-##
+pynight = "*"
 
 [tool.poetry.scripts]
 brishgarden = 'brishgarden:main'
 
-
-
-
-
-
-
-
-[tool.dephell.main]
-from = {format = "poetry", path = "pyproject.toml"}
-to = {format = "setuppy", path = "setup.py"}
-
 [build-system]
-requires = ["poetry>=0.12"]
-build-backend = "poetry.masonry.api"
+requires = [  "setuptools", "poetry_core>=1.0"]
+build-backend = "poetry.core.masonry.api"
