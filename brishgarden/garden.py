@@ -137,9 +137,14 @@ def cmd_zsh(body: dict, request: Request):
         log_level = int(body.get("log_level", 1))
         if isDbg:
             log_level = max(log_level, 100)
+
+        failure_expected = bool(body.get("failure_expected", False))
         ##
 
         log = f"{ip} - cmd: {cmd}, session: {session}, stdin: {stdin[0:100]}, brishes: {len(brishes)}, allBrishes: {len(allBrishes)}"
+        if failure_expected:
+            log+=", failure_expected"
+
         nolog or logger.info(log)
         first_seen and log_tlg(log)
 
@@ -203,7 +208,7 @@ def cmd_zsh(body: dict, request: Request):
 
             break
         ###
-        if res.retcode != 0:
+        if not failure_expected and res.retcode != 0:
             if log_level >= 1:
                 nolog or logger.warning(f"Command failed:\n{res.longstr}")
                 if log_level >= 1:
