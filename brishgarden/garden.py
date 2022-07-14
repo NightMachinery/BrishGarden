@@ -38,8 +38,8 @@ executor = async_max_workers_set(brishes_n + 16)
 ###
 def newBrish(session="", **kwargs):
     return brish.Brish(
-        # FORCE_INTERACTIVE is set by tmuxnewsh2
-        boot_cmd="export GARDEN_ZSH=y ; export GARDEN_SESSION={session} ; unset FORCE_INTERACTIVE ; mkdir -p ~/tmp/garden/ ; cd ~/tmp/garden/ ",
+        #: FORCE_INTERACTIVE is set by tmuxnewsh2
+        boot_cmd="export GARDEN_ZSH=y ; export GARDEN_SESSION={session} ; unset FORCE_INTERACTIVE ; garden_root=~/tmp/garden/ ; mkdir -p $garden_root ; cd $garden_root ",
         **kwargs,
     )
 
