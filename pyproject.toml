@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "brishgarden"
-version = "0.2.3.1"
+version = "0.2.3"
 description = "BrishGarden uses Brish to serve an HTTP API that can execute interpreted code (that would otherwise need expensive startup costs) fast. It's also useful as a remote code executor."
 authors = ["NightMachinary <rudiwillalwaysloveyou@gmail.com>"]
 license = "MIT"
@@ -10,7 +10,6 @@ python = ">=3.7,<4.0"
 python-multipart = ">=0.0.5"
 # brish = {git = "https://github.com/NightMachinary/brish.git"}
 fastapi = {extras = ["all"], version = ">=0.60"}
-pydantic-settings = "^2.0.2"
 passlib = {extras = ["bcrypt", "argon2"], version = ">=1.7"}
 python-jose = {extras = ["cryptography"], version = ">=3.1"}
 brish = "*"
