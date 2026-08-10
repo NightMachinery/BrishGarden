@@ -4,7 +4,7 @@ import time
 import brish
 from brish import CmdResult, z, zp, UninitializedBrishException, zn
 from pynight.common_async import force_async, async_max_workers_set
-from pynight.common_fastapi import FastAPISettings, EndpointLoggingFilter1, request_path_get, check_ip
+from pynight.common_fastapi import FastAPISettings, EndpointLoggingFilter1, request_path_get, check_ip, api_key_dependency_make
 from pynight.common_telegram import log_tlg
 
 import traceback
@@ -12,12 +12,19 @@ import re
 from typing import Optional
 from collections.abc import Iterable
 
-from fastapi import FastAPI, Response, Request
+from fastapi import Depends, FastAPI, Response, Request
 
 settings = FastAPISettings()
-app = FastAPI(openapi_url=settings.openapi_url)
 
 logger = logging.getLogger("uvicorn")  # alt: from uvicorn.config import logger
+
+#: Every endpoint needs `X-API-Key: $(cat ~/.keys/brishgarden)`; the file is
+#: generated here on first boot. Loopback binding does not keep out other local
+#: users, and this endpoint runs arbitrary zsh.
+app = FastAPI(
+    openapi_url=settings.openapi_url,
+    dependencies=[Depends(api_key_dependency_make("brishgarden", logger=logger))],
+)
 
 isDbg = os.environ.get(
     "BRISHGARDEN_DEBUGME", False
@@ -236,5 +243,10 @@ def cmd_zsh(body: dict, request: Request):
         logger.warning(traceback.format_exc())
 
 
-## Old security scheme: (We now use Caddy's HTTP auth.)
+## Security: every endpoint requires the `X-API-Key` header (see the app above).
+# Remote clients authenticate to Caddy with HTTP basic auth instead; Caddy then
+# injects this host's key upstream via `header_up`, so the garden itself only
+# ever knows about the key. See `launchers/Caddyfile` in the scripts repo.
+##
+# Old security scheme, never implemented:
 # Use `pass: str`, hash it a lot along BRISHGARDEN_SALT, and compare to BRISHGARDEN_PASS. Abort if any of the two vars are empty. We probably need to answer the query right away for this security model to work, because hashing necessarily needs to be expensive.

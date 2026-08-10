@@ -18,5 +18,30 @@ pip install git+https://github.com/NightMachinery/BrishGarden.git
 pip install --no-deps --force-reinstall git+https://github.com/NightMachinery/BrishGarden.git
 #+end_example
 
+* security
+Every endpoint requires the header =X-API-Key=. Binding to =127.0.0.1= keeps
+other hosts out, but not the other users of this machine nor a browser tricked
+into POSTing to localhost, and this API runs arbitrary zsh.
+
+The key is generated on first boot into =~/.keys/brishgarden= (mode =0600=),
+which holds a complete header line:
+
+#+begin_example
+X-API-Key: <key>
+#+end_example
+
+That format lets clients send it without ever putting the key in argv, which
+=ps= exposes to every local user:
+
+#+begin_example zsh
+curl --header @$HOME/.keys/brishgarden --header 'Content-Type: application/json' \
+     --request POST --data '{"cmd":"ec hi","verbose":"0"}' \
+     http://127.0.0.1:7230/zsh/
+#+end_example
+
+Remote clients authenticate to a reverse proxy instead. Ours (Caddy) checks HTTP
+basic auth and then injects this host's key upstream with =header_up=, so the
+key never leaves the machine that generated it.
+
 * environment variables
 ** =BRISHGARDEN_N= sets the number of Brishes started by default
