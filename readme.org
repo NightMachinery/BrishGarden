@@ -43,5 +43,41 @@ Remote clients authenticate to a reverse proxy instead. Ours (Caddy) checks HTTP
 basic auth and then injects this host's key upstream with =header_up=, so the
 key never leaves the machine that generated it.
 
+* API
+=POST /zsh/= runs a zsh command in one of the garden's Brish workers; =POST /zsh/nolog/= does the same without an access-log line. The JSON body has these fields:
+- =cmd=: the command, as text.
+- =stdin=: its standard input, as text (default: empty).
+- =json_output= (old name =verbose=): =0= (the default) replies with the command's output as =text/plain=, with stderr merged into stdout. Any other value replies with JSON: =cmd=, =session=, =brishes=, =allBrishes=, =out=, =err= and =retcode=.
+- =session=: run in a dedicated Brish of that name, created on first use, instead of the shared pool.
+- =nolog=, =log_level= and =failure_expected=: control the garden's logging and its failure notification.
+- =cmd_b64=, =stdin_b64= and =binary=: binary data, see below.
+
+The command =%GARDEN_ALL= restarts every Brish.
+
+** Binary data (opt-in)
+JSON strings cannot carry arbitrary bytes, so three optional fields do it with base64:
+- =cmd_b64= and =stdin_b64= hold the command and its stdin as base64 of the raw bytes. They take precedence over =cmd= and =stdin=. Whitespace inside them is ignored.
+- =binary: 1= asks for the exact output. The plain reply (=json_output: 0=) is then the raw bytes of stdout followed by stderr, as =application/octet-stream=. The JSON reply adds =out_b64= and =err_b64=, the base64 of the exact stdout and stderr, next to the text fields =out= and =err=.
+
+#+begin_example zsh
+curl --header @$HOME/.keys/brishgarden --header 'Content-Type: application/json' \
+     --request POST --data '{"cmd_b64":"Y2F0","stdin_b64":"/wA=","binary":1}' \
+     --dump-header /dev/stderr http://127.0.0.1:7230/zsh/ | od -c
+#+end_example
+
+Here ~Y2F0~ is =cat= and ~/wA=~ is the two bytes =\xff\0=, which come back unchanged.
+
+Exact bytes need the garden's Brish to run in binary mode: start the garden process with =BRISH_BINARY=1= (see "Binary Data" in Brish's readme). Such a garden marks every reply to a =binary: 1= request with the header =X-Brish-Binary: 1= (it goes out lowercased, as =x-brish-binary=; header names are case-insensitive). Other gardens never send it:
+- a garden whose Brish runs in legacy mode refuses a =binary: 1= request without running it, and replies with retcode 9000 and a message that says so;
+- a garden older than these fields ignores them, so a request that carries its command only in =cmd_b64= gets "Empty command received." and nothing runs.
+
+So a client that needs exact output should check for the header, and fail when it is missing: then nothing ran.
+
+Without =binary: 1=, the =_b64= fields still deliver exact input, and the reply is the usual text reply. A garden in legacy mode accepts them only when they decode as UTF-8, since it carries text; otherwise it refuses the request before running anything. A malformed request (invalid base64, a field that is not a string) is refused the same way, with retcode 9000.
+
+Requests without the new fields get the same replies as before. From a garden in legacy mode they are byte-identical. In binary mode the text views are exact, so replies differ only where legacy mode lost information: a =\r= is kept, where legacy mode turns =\r\n= and a lone =\r= into a newline and drops a trailing =\r=; and a NUL in the output no longer desynchronizes the worker. Binary mode also changes how some commands end (=exit=, NOMATCH errors, =errexit=); see Brish's readme. In both modes, a lone surrogate in a text field of the reply (a JSON request can smuggle one in with a =\udcff= escape) is escaped as text, where it used to make the reply fail.
+
 * environment variables
 ** =BRISHGARDEN_N= sets the number of Brishes started by default
+** =BRISH_BINARY=1= runs the garden's Brishes in binary mode
+Brish reads it when each Brish starts, so changing it needs a restart of the garden process; =%GARDEN_ALL= keeps the process's mode.

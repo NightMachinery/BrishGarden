@@ -14,7 +14,13 @@ from collections.abc import Iterable
 
 from fastapi import Depends, FastAPI, Response, Request
 
-from brishgarden.reply import brish_run, notice_reply, reply_build
+from brishgarden.reply import (
+    RETCODE_GARDEN_ERROR,
+    brish_run,
+    notice_reply,
+    reply_build,
+    request_parse,
+)
 
 settings = FastAPISettings()
 
@@ -88,6 +94,11 @@ def init_brishes(erase_sessions=True):
         allBrishes.update(new_brishes)
 
 
+def garden_binary_p():
+    """Whether the garden's Brish runs in binary mode (env var BRISH_BINARY)."""
+    return bool(getattr(brish_server, "binary", False))
+
+
 allBrishes = None
 brish_server = None
 logger.info(f"Initializing {brishes_n} brishes ...")
@@ -124,6 +135,7 @@ def cmd_zsh(body: dict, request: Request):
     try:
         # GET Method: cmd: str, verbose: Optional[int] = 0
         # body: cmd [verbose: int=0,1] [stdin: str]
+        # binary transport: [cmd_b64: str] [stdin_b64: str] [binary: int=0,1]; see brishgarden/reply.py
         ##
         # print(body)
         # print(request.__dict__)
@@ -132,8 +144,12 @@ def cmd_zsh(body: dict, request: Request):
         req_path = request_path_get(request)
 
         session = body.get("session", "")
-        cmd = body.get("cmd", "")
-        stdin = body.get("stdin", "")
+        req = request_parse(
+            body,
+            binary_mode=garden_binary_p(),
+            encoding=getattr(brish_server, "encoding", "utf-8"),
+        )
+        cmd = req.cmd_display  #: surrogate-free; `req.cmd` is what runs
         json_output = int(
             body.get("json_output", body.get("verbose", 0))
         )  # old API had this named 'verbose'
@@ -150,15 +166,34 @@ def cmd_zsh(body: dict, request: Request):
         failure_expected = bool(body.get("failure_expected", False))
         ##
 
-        log = f"{ip} - cmd: {cmd}, session: {session}, stdin: {stdin[0:100]}, brishes: {len(brishes)}, allBrishes: {len(allBrishes)}"
+        log = f"{ip} - cmd: {cmd}, session: {session}, stdin: {req.stdin_display}, brishes: {len(brishes)}, allBrishes: {len(allBrishes)}"
         if failure_expected:
             log+=", failure_expected"
+        if req.binary_requested:
+            log+=", binary"
 
         nolog or logger.info(log)
         first_seen and log_tlg(log)
 
+        if req.error is not None:
+            #: A malformed request, or a binary request to a legacy-mode
+            #: garden: reply with the error, without running anything.
+            res = CmdResult(RETCODE_GARDEN_ERROR, "", req.error, cmd, req.stdin_display)
+            if not failure_expected and log_level >= 1:
+                nolog or logger.warning(f"Request refused:\n{res.longstr}")
+
+            return reply_build(
+                res,
+                json_output,
+                req.binary_reply,
+                cmd=cmd,
+                session=session,
+                brishes=len(brishes),
+                all_brishes=len(allBrishes),
+            )
+
         if cmd == "":
-            return notice_reply("Empty command received.")
+            return notice_reply("Empty command received.", req.binary_reply)
         magic_matches = pattern_magic.match(cmd)
         if magic_matches is not None:
             magic_head = magic_matches.group(1)
@@ -171,7 +206,7 @@ def cmd_zsh(body: dict, request: Request):
                 log += "\nUnknown magic!"
                 logger.warning("Unknown magic!")
 
-            return notice_reply(log)
+            return notice_reply(log, req.binary_reply)
 
         while True:
             if session:
@@ -191,8 +226,8 @@ def cmd_zsh(body: dict, request: Request):
             try:
                 res = brish_run(
                     myBrish,
-                    cmd,
-                    stdin,
+                    req.cmd,
+                    req.stdin,
                     json_output=json_output,
                     server_index=server_index,
                 )
@@ -203,7 +238,7 @@ def cmd_zsh(body: dict, request: Request):
                 time.sleep(1)
                 continue
             except:
-                res = CmdResult(9000, "", traceback.format_exc(), cmd, stdin)
+                res = CmdResult(RETCODE_GARDEN_ERROR, "", traceback.format_exc(), req.cmd, req.stdin)
                 log_level = max(log_level, 101)
 
             if not session and not (server_index in brishes):
@@ -227,6 +262,7 @@ def cmd_zsh(body: dict, request: Request):
         return reply_build(
             res,
             json_output,
+            req.binary_reply,
             cmd=cmd,
             session=session,
             brishes=len(brishes),

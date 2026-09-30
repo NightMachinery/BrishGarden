@@ -1,18 +1,29 @@
-"""Reply building, without workers or the garden app.
+"""Request decoding and reply building, without workers or the garden app.
 
 The reference replies below are the ones the endpoint built inline before
 `brishgarden.reply` existed; a request that does not opt in to binary
 transport must still get exactly these.
 """
 
+import base64
 import json
 
+import pytest
 from fastapi import Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 
 from brish import CmdResult
-from brishgarden.reply import notice_reply, reply_build
+from brishgarden.reply import (
+    BINARY_HEADER,
+    LEGACY_REFUSAL,
+    STDIN_LOG_LIMIT,
+    notice_reply,
+    reply_build,
+    request_parse,
+    text_display,
+    text_safe,
+)
 
 
 def legacy_plain(res):
@@ -78,3 +89,205 @@ def test_notice_reply():
     assert wire(notice_reply("Empty command received.")) == wire(
         Response(content="Empty command received.", media_type="text/plain")
     )
+
+
+###
+#: Binary transport.
+
+ALL_BYTES = bytes(range(256))
+MODES = [True, False]
+
+
+def b64(data):
+    return base64.b64encode(data).decode("ascii")
+
+
+def header(reply):
+    if not isinstance(reply, Response):
+        return None
+    return reply.headers.get(BINARY_HEADER)
+
+
+def assert_surrogate_free(*texts):
+    for t in texts:
+        t.encode("utf-8")
+
+
+@pytest.mark.parametrize("binary_mode", MODES)
+def test_parse_without_new_fields(binary_mode):
+    body = {"cmd": "echo hi", "stdin": "x" * 300, "json_output": 1}
+    req = request_parse(body, binary_mode=binary_mode)
+    assert (req.cmd, req.stdin) == ("echo hi", "x" * 300)
+    assert req.cmd_display == "echo hi"
+    assert req.stdin_display == "x" * STDIN_LOG_LIMIT
+    assert not req.binary_requested and not req.binary_reply
+    assert req.error is None
+
+
+@pytest.mark.parametrize("binary_mode", MODES)
+def test_parse_defaults(binary_mode):
+    req = request_parse({}, binary_mode=binary_mode)
+    assert (req.cmd, req.stdin, req.cmd_display, req.error) == ("", "", "", None)
+
+
+def test_parse_b64_fields_take_precedence_binary_mode():
+    body = {
+        "cmd": "not this",
+        "cmd_b64": b64(b"print -rn -- \xff"),
+        "stdin": "nor this",
+        "stdin_b64": b64(ALL_BYTES),
+    }
+    req = request_parse(body, binary_mode=True)
+    assert req.error is None
+    assert req.cmd == b"print -rn -- \xff"
+    assert req.stdin == ALL_BYTES
+    assert req.cmd_display == "print -rn -- \\xff"
+    assert_surrogate_free(req.cmd_display, req.stdin_display)
+    assert len(req.stdin_display.encode("utf-8")) >= STDIN_LOG_LIMIT
+
+
+def test_parse_b64_fields_legacy_mode_decode_to_text():
+    body = {"cmd": "not this", "cmd_b64": b64("print -r -- café".encode()), "stdin_b64": b64(b"a\nb\n")}
+    req = request_parse(body, binary_mode=False)
+    assert req.error is None
+    assert (req.cmd, req.stdin) == ("print -r -- café", "a\nb\n")
+
+
+@pytest.mark.parametrize("name", ["cmd", "stdin"])
+def test_parse_legacy_mode_refuses_invalid_utf8(name):
+    req = request_parse({"cmd": "cat", name + "_b64": b64(b"\xff")}, binary_mode=False)
+    assert req.error is not None and f"{name}_b64" in req.error
+    assert (req.cmd, req.stdin) == ("", "")
+
+
+def test_parse_empty_b64_still_takes_precedence():
+    req = request_parse({"cmd": "echo hi", "cmd_b64": ""}, binary_mode=True)
+    assert req.error is None and req.cmd == b"" and req.cmd_display == ""
+
+
+def test_parse_null_b64_is_absent():
+    req = request_parse({"cmd": "echo hi", "cmd_b64": None}, binary_mode=True)
+    assert req.cmd == "echo hi"
+
+
+@pytest.mark.parametrize("binary_mode", MODES)
+@pytest.mark.parametrize(
+    "body, field",
+    [
+        ({"cmd_b64": "not base64!"}, "cmd_b64"),
+        ({"cmd_b64": "YQ"}, "cmd_b64"),  # missing padding
+        ({"cmd": "cat", "stdin_b64": "@@@@"}, "stdin_b64"),
+        ({"cmd_b64": 5}, "cmd_b64"),
+        ({"cmd": 5}, "cmd"),
+        ({"cmd": "cat", "stdin": ["a"]}, "stdin"),
+        ({"cmd": "cat", "stdin": None}, "stdin"),
+    ],
+)
+def test_parse_malformed(binary_mode, body, field):
+    req = request_parse(body, binary_mode=binary_mode)
+    assert req.error is not None and field in req.error, req
+    assert (req.cmd, req.stdin) == ("", "")
+
+
+def test_parse_b64_ignores_whitespace():
+    data = ALL_BYTES * 4
+    wrapped = "\n".join(b64(data)[i : i + 76] for i in range(0, len(b64(data)), 76)) + "\n"
+    assert request_parse({"cmd": "cat", "stdin_b64": wrapped}, binary_mode=True).stdin == data
+
+
+@pytest.mark.parametrize(
+    "value, want",
+    [(1, True), ("1", True), (True, True), ("y", True), (0, False), ("0", False),
+     ("", False), (False, False), (None, False), ("no", False), ("false", False)],
+)
+def test_parse_binary_flag(value, want):
+    req = request_parse({"cmd": "cat", "binary": value}, binary_mode=True)
+    assert (req.binary_requested, req.binary_reply, req.error) == (want, want, None)
+
+
+def test_parse_binary_flag_in_legacy_mode_is_refused():
+    req = request_parse({"cmd": "touch x", "binary": 1}, binary_mode=False)
+    assert req.error == LEGACY_REFUSAL
+    assert req.binary_requested and not req.binary_reply
+    assert (req.cmd, req.stdin) == ("", "")
+    #: The display still shows what was sent, for the log.
+    assert req.cmd_display == "touch x"
+
+
+def test_parse_stdin_display_limit_bytes():
+    req = request_parse({"cmd": "cat", "stdin_b64": b64(b"\xff" * 1000)}, binary_mode=True)
+    assert req.stdin_display == "\\xff" * STDIN_LOG_LIMIT
+
+
+def test_text_safe():
+    assert text_safe("café") == "café"
+    assert text_safe("a\udcffb\ud800") == "a\\udcffb\\ud800"
+    assert text_display(b"a\xffb") == "a\\xffb"
+    assert text_display(bytearray(b"ab"), limit=1) == "a"
+
+
+def test_parse_surrogates_in_cmd_are_displayed_safely():
+    #: A JSON string can carry lone surrogates ("\udcff"); the echo must
+    #: still encode.
+    req = request_parse(json.loads('{"cmd": "echo \\udcff"}'), binary_mode=True)
+    assert req.cmd == "echo \udcff"
+    assert req.cmd_display == "echo \\udcff"
+
+
+def exact_result(outb, errb, retcode=0):
+    return CmdResult.from_bytes(retcode, outb, errb, b"cmd", b"")
+
+
+def test_binary_plain_reply():
+    res = exact_result(ALL_BYTES + b"\r\n\r", b"\0err\xff")
+    reply = reply_build(res, 0, True)
+    assert reply.body == ALL_BYTES + b"\r\n\r" + b"\0err\xff"
+    assert reply.media_type == "application/octet-stream"
+    assert reply.headers["content-type"] == "application/octet-stream"
+    assert header(reply) == "1"
+
+
+def test_binary_json_reply():
+    res = exact_result(ALL_BYTES, b"e\r\n\xff", retcode=3)
+    reply = reply_build(res, 1, True, cmd=b"cat \xff", session="s", brishes=1, all_brishes=2)
+    assert header(reply) == "1"
+    got = json.loads(reply.body)
+    assert base64.b64decode(got["out_b64"]) == ALL_BYTES
+    assert base64.b64decode(got["err_b64"]) == b"e\r\n\xff"
+    assert (got["out"], got["err"], got["retcode"]) == (res.out, res.err, 3)
+    assert got["cmd"] == "cat \\xff"
+    assert (got["session"], got["brishes"], got["allBrishes"]) == ("s", 1, 2)
+    #: The fields of the non-binary reply, plus the two new ones.
+    assert set(got) == set(legacy_json(res, "", "", 0, 0)) | {"out_b64", "err_b64"}
+
+
+def test_non_binary_replies_have_no_header():
+    res = exact_result(b"x\r\n", b"")
+    for json_output in (0, 1):
+        assert header(reply_build(res, json_output)) is None
+        assert header(reply_build(res, json_output, False)) is None
+    assert header(notice_reply("x")) is None
+    assert header(notice_reply("x", True)) == "1"
+
+
+def test_text_views_with_surrogates_still_encode():
+    #: The text views of brish results never hold surrogates with the default
+    #: decoding errors; a result built by hand might.
+    res = CmdResult(0, "out \udcff", "err \ud800", "cmd", "")
+    for binary in (False, True):
+        _, _, body = wire(reply_build(res, 1, binary, cmd=res.cmd))
+        got = json.loads(body)
+        assert (got["out"], got["err"]) == ("out \\udcff", "err \\ud800")
+    assert wire(reply_build(res, 0))[2] == "out \\udcfferr \\ud800".encode()
+
+
+def test_positional_error_result_with_bytes():
+    #: The endpoint's error result, built from bytes-like cmd and stdin.
+    tb = "Traceback (most recent call last):\n  ...\n"
+    res = CmdResult(9000, "", tb, b"cmd \xff", b"stdin\x00\xff")
+    assert (res.retcode, res.out, res.err) == (9000, "", tb)
+    assert (res.outb, res.errb) == (b"", tb.encode())
+    res.longstr.encode("utf-8")
+    assert reply_build(res, 0, True).body == tb.encode()
+    assert json.loads(reply_build(res, 1, True).body)["err"] == tb
+    assert wire(reply_build(res, 0)) == wire(legacy_plain(res))
