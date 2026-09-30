@@ -14,6 +14,8 @@ from collections.abc import Iterable
 
 from fastapi import Depends, FastAPI, Response, Request
 
+from brishgarden.reply import brish_run, notice_reply, reply_build
+
 settings = FastAPISettings()
 
 logger = logging.getLogger("uvicorn")  # alt: from uvicorn.config import logger
@@ -156,7 +158,7 @@ def cmd_zsh(body: dict, request: Request):
         first_seen and log_tlg(log)
 
         if cmd == "":
-            return Response(content="Empty command received.", media_type="text/plain")
+            return notice_reply("Empty command received.")
         magic_matches = pattern_magic.match(cmd)
         if magic_matches is not None:
             magic_head = magic_matches.group(1)
@@ -169,7 +171,7 @@ def cmd_zsh(body: dict, request: Request):
                 log += "\nUnknown magic!"
                 logger.warning("Unknown magic!")
 
-            return Response(content=log, media_type="text/plain")
+            return notice_reply(log)
 
         while True:
             if session:
@@ -187,18 +189,13 @@ def cmd_zsh(body: dict, request: Request):
             ###
             res: CmdResult
             try:
-                if json_output == 0:
-                    # we need to output a single string, so we can't need to put stderr and stdout together
-                    res = myBrish.z(
-                        "{{ eval {cmd} }} 2>&1",
-                        fork=False,
-                        cmd_stdin=stdin,
-                        server_index=server_index,
-                    )
-                else:
-                    res = myBrish.send_cmd(
-                        cmd, fork=False, cmd_stdin=stdin, server_index=server_index
-                    )
+                res = brish_run(
+                    myBrish,
+                    cmd,
+                    stdin,
+                    json_output=json_output,
+                    server_index=server_index,
+                )
             except UninitializedBrishException:
                 if log_level >= 2:
                     logger.info("Encountered UninitializedBrishException")
@@ -227,18 +224,14 @@ def cmd_zsh(body: dict, request: Request):
                         """
                     )
 
-        if json_output == 0:
-            return Response(content=res.outerr, media_type="text/plain")
-        else:
-            return {
-                "cmd": cmd,
-                "session": session,
-                "brishes": len(brishes),
-                "allBrishes": len(allBrishes),
-                "out": res.out,
-                "err": res.err,
-                "retcode": res.retcode,
-            }
+        return reply_build(
+            res,
+            json_output,
+            cmd=cmd,
+            session=session,
+            brishes=len(brishes),
+            all_brishes=len(allBrishes),
+        )
     except:
         logger.warning(traceback.format_exc())
 
