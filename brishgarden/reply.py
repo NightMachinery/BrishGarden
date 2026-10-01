@@ -4,6 +4,10 @@
 decides what a request means and what its reply looks like lives here, where
 it can be imported (and tested) without side effects.
 
+A request goes through three steps. Decoding turns it into a `ZshRequest`;
+the garden's `zsh_handle` logs it and runs it, giving a `ZshOutcome`; and a
+reply builder turns that outcome into the endpoint's reply.
+
 Binary transport is opt-in per request (see the readme):
 - `cmd_b64` and `stdin_b64` carry the command and its stdin as base64 of raw
   bytes, and take precedence over `cmd` and `stdin`;
@@ -23,7 +27,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from brish import bool_from_str
+from brish import CmdResult, bool_from_str
 from fastapi import Response
 from fastapi.responses import JSONResponse
 
@@ -87,6 +91,9 @@ class ZshRequest:
     `_b64` fields and the garden runs in binary mode, else str. The display
     fields are always surrogate-free str. When `error` is set, the request
     must not be run; `error` is the message to reply with.
+
+    The remaining fields are the request's options, as the client sent them;
+    the garden combines `nolog` and `log_level` with its own settings.
     """
 
     cmd: Any
@@ -98,6 +105,24 @@ class ZshRequest:
     #: The reply is a binary reply: requested, and the garden runs in binary mode.
     binary_reply: bool
     error: Optional[str] = None
+    session: Any = ""
+    #: The shape of a JSON API reply: `0` is the plain reply path.
+    json_output: int = 0
+    #: Merge stderr into stdout in the shell (the plain reply path).
+    merge: bool = True
+    nolog: bool = False
+    log_level: int = 1
+    failure_expected: bool = False
+
+
+@dataclass(frozen=True)
+class ZshOutcome:
+    """What running a `ZshRequest` gave: a command's result (or a refusal,
+    with retcode 9000), or else a notice that is not a command's output (an
+    empty command, a magic command's log)."""
+
+    res: Optional[CmdResult] = None
+    notice: Optional[str] = None
 
 
 def _payload(body, name):
@@ -139,7 +164,14 @@ def request_parse(body, *, binary_mode, encoding="utf-8"):
 
     `binary_mode` is whether the garden's Brish runs in binary mode. The
     decoding never raises for a malformed payload; it sets `error` instead.
+    It raises only where the endpoint always failed: a `json_output` (or
+    `verbose`) or `log_level` that `int()` refuses. The endpoint then answers
+    `null`, as it always has.
     """
+    #: The old API named json_output 'verbose'.
+    json_output = int(body.get("json_output", body.get("verbose", 0)))
+    log_level = int(body.get("log_level", 1))
+
     binary_requested = bool_from_str(body.get("binary", ""))
     binary_reply = binary_requested and bool(binary_mode)
 
@@ -169,17 +201,23 @@ def request_parse(body, *, binary_mode, encoding="utf-8"):
         binary_requested=binary_requested,
         binary_reply=binary_reply,
         error=error,
+        session=body.get("session", ""),
+        json_output=json_output,
+        merge=json_output == 0,
+        nolog=bool(body.get("nolog", "")),
+        log_level=log_level,
+        failure_expected=bool(body.get("failure_expected", False)),
     )
 
 
-def brish_run(brish, cmd, stdin, *, json_output, server_index):
+def brish_run(brish, cmd, stdin, *, merge, server_index):
     """Run a request's command on worker `server_index` of `brish`.
 
-    The plain reply path (`json_output == 0`) has a single body, so it merges
-    stderr into stdout in the shell. In binary mode a bytes `cmd` is quoted
+    With `merge` (the plain reply path, which has a single body), stderr is
+    merged into stdout in the shell. In binary mode a bytes `cmd` is quoted
     byte-exactly into the `eval` wrapper.
     """
-    if json_output == 0:
+    if merge:
         return brish.z(
             "{{ eval {cmd} }} 2>&1",
             locals_={"cmd": cmd},
@@ -247,3 +285,18 @@ def reply_build(
     reply["out_b64"] = base64.b64encode(res.outb).decode("ascii")
     reply["err_b64"] = base64.b64encode(res.errb).decode("ascii")
     return JSONResponse(content=reply, headers=_binary_headers(True))
+
+
+def json_reply(outcome, req, *, brishes=0, all_brishes=0):
+    """The JSON API's reply to `req`, whose run gave the ZshOutcome `outcome`."""
+    if outcome.notice is not None:
+        return notice_reply(outcome.notice, req.binary_reply)
+    return reply_build(
+        outcome.res,
+        req.json_output,
+        req.binary_reply,
+        cmd=req.cmd_display,
+        session=req.session,
+        brishes=brishes,
+        all_brishes=all_brishes,
+    )

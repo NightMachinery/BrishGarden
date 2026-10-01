@@ -17,9 +17,9 @@ from fastapi import Depends, FastAPI, Response, Request
 from brishgarden.mode import garden_mode_get
 from brishgarden.reply import (
     RETCODE_GARDEN_ERROR,
+    ZshOutcome,
     brish_run,
-    notice_reply,
-    reply_build,
+    json_reply,
     request_parse,
 )
 
@@ -140,6 +140,120 @@ async def get_ip(request: Request):
 ###
 pattern_magic = re.compile(r"(?im)^%GARDEN_(\S+)\s+((?:.|\n)*)$") # @duplicateCode/86da52eced14bf6baa394f50a9601812
 
+def zsh_handle(request: Request, decode):
+    """Log and run one request, the shared code path of every `/zsh/` route.
+
+    `decode()` gives the `ZshRequest`. It is called after `check_ip`, so a new
+    IP is noticed even when its request is malformed. Returns the request
+    and its `ZshOutcome`, which each route turns into its own reply.
+    """
+    ip, first_seen = check_ip(request, logger=logger)
+    req_path = request_path_get(request)
+
+    req = decode()
+    cmd = req.cmd_display  #: surrogate-free; `req.cmd` is what runs
+    session = req.session
+    ##
+    nolog = (
+        not isDbg and ip == "127.0.0.1" and
+        (req.nolog or (req_path in skip_paths))
+    )  # Use /zsh/nolog/ to hide the access logs.
+
+    log_level = req.log_level
+    if isDbg:
+        log_level = max(log_level, 100)
+
+    failure_expected = req.failure_expected
+    ##
+
+    log = f"{ip} - cmd: {cmd}, session: {session}, stdin: {req.stdin_display}, brishes: {len(brishes)}, allBrishes: {len(allBrishes)}"
+    if failure_expected:
+        log+=", failure_expected"
+    if req.binary_requested:
+        log+=", binary"
+
+    nolog or logger.info(log)
+    first_seen and log_tlg(log)
+
+    if req.error is not None:
+        #: A malformed request, or a binary request to a legacy-mode
+        #: garden: reply with the error, without running anything.
+        res = CmdResult(RETCODE_GARDEN_ERROR, "", req.error, cmd, req.stdin_display)
+        if not failure_expected and log_level >= 1:
+            nolog or logger.warning(f"Request refused:\n{res.longstr}")
+
+        return req, ZshOutcome(res=res)
+
+    if cmd == "":
+        return req, ZshOutcome(notice="Empty command received.")
+    magic_matches = pattern_magic.match(cmd)
+    if magic_matches is not None:
+        magic_head = magic_matches.group(1)
+        magic_exp = magic_matches.group(2)
+        log = f"Magic received: {magic_head}"
+        logger.info(log)
+        if magic_head == "ALL":
+            init_brishes()
+        else:
+            log += "\nUnknown magic!"
+            logger.warning("Unknown magic!")
+
+        return req, ZshOutcome(notice=log)
+
+    while True:
+        if session:
+            # @design garbage collect
+            myBrish, server_index = allBrishes.get(session, (None, None))
+            if not myBrish:
+                myBrish, server_index = allBrishes.setdefault(
+                    session, (newBrish(session=session, server_count=1), 0)
+                )  # is atomic https://bugs.python.org/issue13521#:~:text=setdefault()%20was%20intended%20to,()%20which%20can%20call%20arbitrary
+        else:
+            while len(brishes) <= 0:
+                time.sleep(1)
+            myBrish = brish_server
+            server_index = brishes.pop()
+        ###
+        res: CmdResult
+        try:
+            res = brish_run(
+                myBrish,
+                req.cmd,
+                req.stdin,
+                merge=req.merge,
+                server_index=server_index,
+            )
+        except UninitializedBrishException:
+            if log_level >= 2:
+                logger.info("Encountered UninitializedBrishException")
+
+            time.sleep(1)
+            continue
+        except:
+            res = CmdResult(RETCODE_GARDEN_ERROR, "", traceback.format_exc(), req.cmd, req.stdin)
+            log_level = max(log_level, 101)
+
+        if not session and not (server_index in brishes):
+            # duplicate brishes might be added here because of race conditions, but as brishes have their own locking, this doesn't matter, as we garbage-collect the dups here
+            brishes.append(server_index)
+
+        break
+    ###
+    if not failure_expected and res.retcode != 0:
+        if log_level >= 1:
+            nolog or logger.warning(f"Command failed:\n{res.longstr}")
+            if log_level >= 1:
+                zn(
+                    """
+                    if isMe && isLocal ; then
+                       {{ tts-glados1-cached "A command has failed." ; bello }} &>/dev/null </dev/null &
+                    fi
+                    """
+                )
+
+    return req, ZshOutcome(res=res)
+
+
 @app.post("/zsh/")
 @app.post("/zsh/nolog/")
 def cmd_zsh(body: dict, request: Request):
@@ -151,133 +265,16 @@ def cmd_zsh(body: dict, request: Request):
         # print(body)
         # print(request.__dict__)
         ##
-        ip, first_seen = check_ip(request, logger=logger)
-        req_path = request_path_get(request)
-
-        session = body.get("session", "")
-        req = request_parse(
-            body,
-            binary_mode=garden_binary_p(),
-            encoding=getattr(brish_server, "encoding", "utf-8"),
+        req, outcome = zsh_handle(
+            request,
+            lambda: request_parse(
+                body,
+                binary_mode=garden_binary_p(),
+                encoding=getattr(brish_server, "encoding", "utf-8"),
+            ),
         )
-        cmd = req.cmd_display  #: surrogate-free; `req.cmd` is what runs
-        json_output = int(
-            body.get("json_output", body.get("verbose", 0))
-        )  # old API had this named 'verbose'
-        ##
-        nolog = (
-            not isDbg and ip == "127.0.0.1" and
-            (bool(body.get("nolog", "")) or (req_path in skip_paths))
-        )  # Use /zsh/nolog/ to hide the access logs.
-
-        log_level = int(body.get("log_level", 1))
-        if isDbg:
-            log_level = max(log_level, 100)
-
-        failure_expected = bool(body.get("failure_expected", False))
-        ##
-
-        log = f"{ip} - cmd: {cmd}, session: {session}, stdin: {req.stdin_display}, brishes: {len(brishes)}, allBrishes: {len(allBrishes)}"
-        if failure_expected:
-            log+=", failure_expected"
-        if req.binary_requested:
-            log+=", binary"
-
-        nolog or logger.info(log)
-        first_seen and log_tlg(log)
-
-        if req.error is not None:
-            #: A malformed request, or a binary request to a legacy-mode
-            #: garden: reply with the error, without running anything.
-            res = CmdResult(RETCODE_GARDEN_ERROR, "", req.error, cmd, req.stdin_display)
-            if not failure_expected and log_level >= 1:
-                nolog or logger.warning(f"Request refused:\n{res.longstr}")
-
-            return reply_build(
-                res,
-                json_output,
-                req.binary_reply,
-                cmd=cmd,
-                session=session,
-                brishes=len(brishes),
-                all_brishes=len(allBrishes),
-            )
-
-        if cmd == "":
-            return notice_reply("Empty command received.", req.binary_reply)
-        magic_matches = pattern_magic.match(cmd)
-        if magic_matches is not None:
-            magic_head = magic_matches.group(1)
-            magic_exp = magic_matches.group(2)
-            log = f"Magic received: {magic_head}"
-            logger.info(log)
-            if magic_head == "ALL":
-                init_brishes()
-            else:
-                log += "\nUnknown magic!"
-                logger.warning("Unknown magic!")
-
-            return notice_reply(log, req.binary_reply)
-
-        while True:
-            if session:
-                # @design garbage collect
-                myBrish, server_index = allBrishes.get(session, (None, None))
-                if not myBrish:
-                    myBrish, server_index = allBrishes.setdefault(
-                        session, (newBrish(session=session, server_count=1), 0)
-                    )  # is atomic https://bugs.python.org/issue13521#:~:text=setdefault()%20was%20intended%20to,()%20which%20can%20call%20arbitrary
-            else:
-                while len(brishes) <= 0:
-                    time.sleep(1)
-                myBrish = brish_server
-                server_index = brishes.pop()
-            ###
-            res: CmdResult
-            try:
-                res = brish_run(
-                    myBrish,
-                    req.cmd,
-                    req.stdin,
-                    json_output=json_output,
-                    server_index=server_index,
-                )
-            except UninitializedBrishException:
-                if log_level >= 2:
-                    logger.info("Encountered UninitializedBrishException")
-
-                time.sleep(1)
-                continue
-            except:
-                res = CmdResult(RETCODE_GARDEN_ERROR, "", traceback.format_exc(), req.cmd, req.stdin)
-                log_level = max(log_level, 101)
-
-            if not session and not (server_index in brishes):
-                # duplicate brishes might be added here because of race conditions, but as brishes have their own locking, this doesn't matter, as we garbage-collect the dups here
-                brishes.append(server_index)
-
-            break
-        ###
-        if not failure_expected and res.retcode != 0:
-            if log_level >= 1:
-                nolog or logger.warning(f"Command failed:\n{res.longstr}")
-                if log_level >= 1:
-                    zn(
-                        """
-                        if isMe && isLocal ; then
-                           {{ tts-glados1-cached "A command has failed." ; bello }} &>/dev/null </dev/null &
-                        fi
-                        """
-                    )
-
-        return reply_build(
-            res,
-            json_output,
-            req.binary_reply,
-            cmd=cmd,
-            session=session,
-            brishes=len(brishes),
-            all_brishes=len(allBrishes),
+        return json_reply(
+            outcome, req, brishes=len(brishes), all_brishes=len(allBrishes)
         )
     except:
         logger.warning(traceback.format_exc())

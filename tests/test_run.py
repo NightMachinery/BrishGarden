@@ -15,7 +15,7 @@ def test_plain_path_merges_stderr():
         b = garden_brish(server_count=1)
         try:
             res = brish_run(b, "print -r -- out; print -r -- err >&2; print -r -- out2",
-                            "", json_output=0, server_index=0)
+                            "", merge=True, server_index=0)
             assert res.retcode == 0, res
             assert res.out == "out\nerr\nout2\n", res
             assert res.err == "", res
@@ -32,7 +32,7 @@ def test_json_path_keeps_streams_apart():
         b = garden_brish(server_count=1)
         try:
             res = brish_run(b, "print -r -- out; print -r -- err >&2; return 3",
-                            "", json_output=1, server_index=0)
+                            "", merge=False, server_index=0)
             assert (res.retcode, res.out, res.err) == (3, "out\n", "err\n"), res
         finally:
             b.cleanup()
@@ -48,7 +48,7 @@ def test_cmd_and_stdin_arrive_as_sent():
         cmd = "x='a  b' ; print -r -- \"$x\" '$HOME' ; cat"
         try:
             for json_output in (0, 1):
-                res = brish_run(b, cmd, "line 1\nline 2\n", json_output=json_output, server_index=0)
+                res = brish_run(b, cmd, "line 1\nline 2\n", merge=json_output == 0, server_index=0)
                 assert res.retcode == 0, res
                 assert res.out == "a  b $HOME\nline 1\nline 2\n", res
         finally:
@@ -66,19 +66,24 @@ HANDLE = r'''
 import base64, json
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, Response
-from brishgarden.reply import BINARY_HEADER, brish_run, reply_build, request_parse
+from brishgarden.reply import (
+    BINARY_HEADER, ZshOutcome, brish_run, json_reply, request_parse,
+)
 
 def b64(data):
     return base64.b64encode(data).decode("ascii")
 
+def outcome_get(b, req):
+    #: The garden's `zsh_handle`, minus the pool, sessions, magic and logging.
+    if req.error is not None:
+        return ZshOutcome(res=CmdResult(9000, "", req.error, req.cmd_display, req.stdin_display))
+    if req.cmd_display == "":
+        return ZshOutcome(notice="Empty command received.")
+    return ZshOutcome(res=brish_run(b, req.cmd, req.stdin, merge=req.merge, server_index=0))
+
 def handle(b, body):
     req = request_parse(body, binary_mode=b.binary, encoding=b.encoding)
-    json_output = int(body.get("json_output", 0))
-    if req.error is not None:
-        res = CmdResult(9000, "", req.error, req.cmd_display, req.stdin_display)
-    else:
-        res = brish_run(b, req.cmd, req.stdin, json_output=json_output, server_index=0)
-    reply = reply_build(res, json_output, req.binary_reply, cmd=req.cmd_display, session="")
+    reply = json_reply(outcome_get(b, req), req)
     if not isinstance(reply, Response):
         reply = JSONResponse(content=jsonable_encoder(reply))
     return reply

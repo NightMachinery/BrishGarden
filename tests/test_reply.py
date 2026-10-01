@@ -18,6 +18,8 @@ from brishgarden.reply import (
     BINARY_HEADER,
     LEGACY_REFUSAL,
     STDIN_LOG_LIMIT,
+    ZshOutcome,
+    json_reply,
     notice_reply,
     reply_build,
     request_parse,
@@ -83,6 +85,44 @@ def test_json_reply_serializes():
     for res in RESULTS:
         _, _, body = wire(reply_build(res, 1, cmd=res.cmd))
         assert json.loads(body)["out"] == res.out
+
+
+def test_parse_options():
+    #: The options keep the endpoint's old readings: `bool()` of the raw
+    #: value, so even the string "0" sets nolog and failure_expected.
+    req = request_parse({"cmd": "x"}, binary_mode=True)
+    assert (req.session, req.json_output, req.merge) == ("", 0, True)
+    assert (req.nolog, req.log_level, req.failure_expected) == (False, 1, False)
+
+    body = {"cmd": "x", "session": "s1", "json_output": "1", "nolog": "0",
+            "log_level": "3", "failure_expected": "0"}
+    req = request_parse(body, binary_mode=True)
+    assert (req.session, req.json_output, req.merge) == ("s1", 1, False)
+    assert (req.nolog, req.log_level, req.failure_expected) == (True, 3, True)
+
+    #: The old name of json_output.
+    assert request_parse({"cmd": "x", "verbose": 2}, binary_mode=True).json_output == 2
+    assert request_parse({"cmd": "x", "verbose": 2, "json_output": 0}, binary_mode=True).merge
+
+
+@pytest.mark.parametrize("body", [{"json_output": "x"}, {"verbose": None}, {"log_level": "high"}])
+def test_parse_options_raise_as_before(body):
+    #: The endpoint used to fail here too, answering null; it still does.
+    with pytest.raises((ValueError, TypeError)):
+        request_parse(dict(body, cmd="x"), binary_mode=True)
+
+
+def test_json_reply():
+    res = RESULTS[2]
+    for json_output in (0, 1):
+        req = request_parse({"cmd": res.cmd, "session": "s", "json_output": json_output}, binary_mode=True)
+        got = json_reply(ZshOutcome(res=res), req, brishes=2, all_brishes=3)
+        want = reply_build(res, json_output, cmd=res.cmd, session="s", brishes=2, all_brishes=3)
+        assert wire(got) == wire(want)
+    req = request_parse({"cmd": ""}, binary_mode=True)
+    assert wire(json_reply(ZshOutcome(notice="n"), req)) == wire(notice_reply("n"))
+    req = request_parse({"cmd": "", "binary": 1}, binary_mode=True)
+    assert wire(json_reply(ZshOutcome(notice="n"), req)) == wire(notice_reply("n", True))
 
 
 def test_notice_reply():
