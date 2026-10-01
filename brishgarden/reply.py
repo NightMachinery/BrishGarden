@@ -228,14 +228,54 @@ def request_parse(body, *, binary_mode, encoding="utf-8"):
     )
 
 
+#: The raw API's query parameters.
+RAW_OPTIONS = ("session", "failure_expected", "nolog", "merge", "log_level")
+
+
+def _single_values(mapping, names, what, *, lower=False):
+    """The values of `names` in `mapping`, as a dict of one value per name.
+
+    A name sent more than once with different values is ambiguous: it is
+    left out of the dict, and the second element of the returned pair is
+    the RequestError to raise (else None). Repeats of one value are fine.
+    `mapping` may list repeats: Starlette's QueryParams through
+    `multi_items()`, its Headers through `items()`. With `lower`, names are
+    matched case-insensitively (`names` are then lowercase).
+    """
+    multi = getattr(mapping, "multi_items", None)
+    values = {}
+    for k, v in multi() if multi is not None else mapping.items():
+        if lower:
+            k = k.lower()
+        if k in names:
+            values.setdefault(k, []).append(v)
+    single, conflicts = {}, []
+    for k, vs in values.items():
+        if len(set(vs)) > 1:
+            conflicts.append(f"{k} ({', '.join(repr(v) for v in vs)})")
+        else:
+            single[k] = vs[0]
+    error = None
+    if conflicts:
+        error = RequestError(
+            f"brishgarden: the {what} {'; '.join(conflicts)} must be sent once,"
+            " or with one value\n"
+        )
+    return single, error
+
+
 def _raw_options(query, opts):
     """Fill the dict `opts` with the raw API's options (`ZshRequest` fields)
-    from its query parameters. Raises RequestError for a bad `log_level`,
-    after setting the others, so a refusal still honors failure_expected."""
+    from its query parameters. Raises RequestError for a bad `log_level` or
+    a repeated option with different values, after setting the others, so a
+    refusal still honors failure_expected (unless that is the ambiguous one)."""
+    query, error = _single_values(query, RAW_OPTIONS, "query parameter")
     opts["session"] = query.get("session", "")
     opts["failure_expected"] = bool_from_str(query.get("failure_expected", ""))
     opts["nolog"] = bool_from_str(query.get("nolog", ""))
     opts["merge"] = bool_from_str(query.get("merge", ""))
+    if error is not None:
+        raise error
     log_level = query.get("log_level")
     if log_level is not None:
         try:
@@ -248,7 +288,14 @@ def _raw_options(query, opts):
 
 def _raw_payloads(body, headers):
     """Split a raw request body into (cmd, stdin) bytes; stdin is None for
-    `X-Brish-Stdin: null`. Raises RequestError for a malformed request."""
+    `X-Brish-Stdin: null`. Raises RequestError for a malformed request,
+    including one that repeats either header with different values: which
+    one is meant is ambiguous, and a wrong length would run a wrong command."""
+    headers, error = _single_values(
+        headers, (CMD_LENGTH_HEADER.lower(), STDIN_HEADER.lower()), "header", lower=True
+    )
+    if error is not None:
+        raise error
     length = headers.get(CMD_LENGTH_HEADER.lower())
     if length is None:
         raise RequestError(
@@ -291,14 +338,14 @@ def raw_request_parse(body, headers, query, *, binary_mode, encoding="utf-8"):
     `body` is the command's bytes followed by its stdin's, split at the
     `X-Brish-Cmd-Length` header. `headers` and `query` are mappings, such
     as Starlette's `request.headers` and `request.query_params` (header
-    names are looked up lowercased). In binary mode the command and stdin
+    names are case-insensitive; a header or option repeated with different
+    values is refused). In binary mode the command and stdin
     stay bytes, and `X-Brish-Stdin: null` makes stdin /dev/null. In legacy
     mode they are decoded strictly as `encoding`, and null stdin is empty.
 
     Never raises for a malformed request; it sets `error` instead.
     """
     body = bytes(body)
-    headers = {k.lower(): v for k, v in headers.items()}
     opts = {}
     cmd = stdin = ""
     cmd_display = stdin_display = ""

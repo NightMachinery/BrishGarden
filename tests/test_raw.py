@@ -110,6 +110,53 @@ def test_parse_malformed_keeps_failure_expected():
     assert req.error is not None and req.failure_expected
 
 
+def raw_headers(*pairs):
+    """Starlette Headers that keep repeats, as a real request's do."""
+    return Headers(raw=[(k.encode(), v.encode()) for k, v in pairs])
+
+
+@pytest.mark.parametrize("binary_mode", MODES)
+@pytest.mark.parametrize(
+    "pairs, needle",
+    [
+        #: Either reading would run something: `print -r -- hi`, or `print`
+        #: with the rest of the command as its stdin.
+        ((("X-Brish-Cmd-Length", "5"), ("X-Brish-Cmd-Length", "14")), "x-brish-cmd-length ('5', '14')"),
+        ((("X-Brish-Cmd-Length", "14"), ("x-brish-cmd-length", "5")), "x-brish-cmd-length ('14', '5')"),
+        ((("X-Brish-Cmd-Length", "14"), ("X-Brish-Cmd-Length", "014")), "x-brish-cmd-length"),
+        ((("X-Brish-Cmd-Length", "14"), ("X-Brish-Stdin", "null"), ("X-Brish-Stdin", "NULL")), "x-brish-stdin"),
+    ],
+)
+def test_parse_refuses_conflicting_repeated_headers(binary_mode, pairs, needle):
+    req = raw_request_parse(b"print -r -- hi", raw_headers(*pairs), {}, binary_mode=binary_mode)
+    assert req.error is not None and needle in req.error, req.error
+    assert "must be sent once" in req.error
+    assert (req.cmd, req.stdin) == ("", "")
+
+
+def test_parse_accepts_repeats_of_one_value():
+    pairs = [("X-Brish-Cmd-Length", "3")] * 2 + [("X-Brish-Stdin", "null")] * 2
+    req = raw_request_parse(b"cat", raw_headers(*pairs), QueryParams("merge=1&merge=1"), binary_mode=True)
+    assert req.error is None, req.error
+    assert (req.cmd, req.stdin, req.merge) == (b"cat", None, True)
+    #: Other headers may repeat freely.
+    pairs = [("X-Brish-Cmd-Length", "3"), ("Accept", "a"), ("Accept", "b")]
+    assert raw_request_parse(b"cat", raw_headers(*pairs), {}, binary_mode=True).error is None
+
+
+@pytest.mark.parametrize("name", ["session", "merge", "nolog", "log_level", "failure_expected"])
+def test_parse_refuses_conflicting_repeated_options(name):
+    query = QueryParams(f"{name}=1&{name}=0&failure_expected=1" if name != "failure_expected" else "failure_expected=1&failure_expected=0")
+    req = raw_request_parse(b"cat", {CMD_LENGTH_HEADER: "3"}, query, binary_mode=True)
+    assert req.error is not None and f"query parameter {name} ('1', '0')" in req.error, req.error
+    assert (req.cmd, req.stdin) == ("", "")
+    #: The refusal still honors an unambiguous failure_expected.
+    assert req.failure_expected == (name != "failure_expected")
+    #: Unknown parameters are ignored, repeated or not.
+    query = QueryParams("other=1&other=2")
+    assert raw_request_parse(b"cat", {CMD_LENGTH_HEADER: "3"}, query, binary_mode=True).error is None
+
+
 def test_parse_legacy_mode_decodes_text():
     req = parse("print -r -- café".encode(), b"a\0b", binary_mode=False)
     assert req.error is None
