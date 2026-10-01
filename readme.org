@@ -55,8 +55,19 @@ Remote clients authenticate to a reverse proxy instead. Ours (Caddy) checks HTTP
 basic auth and then injects this host's key upstream with =header_up=, so the
 key never leaves the machine that generated it.
 
+A request body must come with =Content-Type: application/json= (a parameter
+such as =; charset=utf-8= is fine). Without it the garden replies 422 and runs
+nothing, as FastAPI does by default since 0.132 (=strict_content_type=). Older
+gardens parsed a body with no Content-Type as JSON, so a client that sends
+none, such as Python's =requests.post(url, data=json.dumps(body))=, worked
+there and fails now. The strict default is kept on purpose: a browser can send
+a cross-site POST with no Content-Type and no CORS preflight (a =fetch= with a
+=Blob= body). Locally, the required =X-API-Key= stops that request, but behind
+the reverse proxy it may not, since the proxy adds the key itself and a browser
+that has logged in to the proxy may attach its basic-auth credentials.
+
 * API
-=POST /zsh/= runs a zsh command in one of the garden's Brish workers; =POST /zsh/nolog/= does the same without an access-log line. The JSON body has these fields:
+=POST /zsh/= runs a zsh command in one of the garden's Brish workers; =POST /zsh/nolog/= does the same without an access-log line. The body is JSON, sent with =Content-Type: application/json= (see "security" above), and has these fields:
 - =cmd=: the command, as text.
 - =stdin=: its standard input, as text (default: empty).
 - =json_output= (old name =verbose=): =0= (the default) replies with the command's output as =text/plain=, with stderr merged into stdout. Any other value replies with JSON: =cmd=, =session=, =brishes=, =allBrishes=, =out=, =err= and =retcode= (with =binary: 1=, also =out_b64= and =err_b64=, see below).
