@@ -13,7 +13,7 @@ python = ">=3.10,<4.0"
 #: first releases without a known advisory. Starlette is not imported
 #: directly, but it is the HTTP layer under FastAPI, which allows older ones.
 python-multipart = ">=0.0.31"
-# brish = {git = "https://github.com/NightMachinary/brish.git"}
+# brish = {git = "https://github.com/NightMachinery/brish.git"}
 fastapi = {extras = ["all"], version = ">=0.133.0"}
 starlette = ">=1.3.1"
 #: uvicorn 0.47 imports the app before it starts the event loop, and
