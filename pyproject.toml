@@ -2,7 +2,7 @@
 name = "brishgarden"
 version = "0.3.0"
 description = "BrishGarden uses Brish to serve an HTTP API that can execute interpreted code (that would otherwise need expensive startup costs) fast. It's also useful as a remote code executor."
-authors = ["NightMachinary <rudiwillalwaysloveyou@gmail.com>"]
+authors = ["NightMachinery <rudiwillalwaysloveyou@gmail.com>"]
 license = "MIT"
 
 [tool.poetry.dependencies]
