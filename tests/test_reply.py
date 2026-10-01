@@ -294,12 +294,38 @@ def test_binary_json_reply():
     got = json.loads(reply.body)
     assert base64.b64decode(got["out_b64"]) == ALL_BYTES
     assert base64.b64decode(got["err_b64"]) == b"e\r\n\xff"
-    assert got["retcode"] == 3
+    assert (got["out"], got["err"], got["retcode"]) == (res.out, res.err, 3)
     assert got["cmd"] == "cat \\xff"
     assert (got["session"], got["brishes"], got["allBrishes"]) == ("s", 1, 2)
-    #: The fields of the non-binary reply, with the base64 fields in place of
-    #: the text fields, which would only duplicate them.
-    assert set(got) == set(legacy_json(res, "", "", 0, 0)) - {"out", "err"} | {"out_b64", "err_b64"}
+    #: The fields of the non-binary reply, plus the two new ones, in order:
+    #: clients such as brishz_para.dash read out and err from it.
+    legacy = list(legacy_json(res, "", "", 0, 0))
+    assert list(got) == legacy + ["out_b64", "err_b64"]
+
+    #: b64_only drops the text fields, which only duplicate the base64 ones.
+    slim = json.loads(reply_build(res, 1, True, b64_only=True, cmd=b"cat \xff", session="s", brishes=1, all_brishes=2).body)
+    assert list(slim) == [k for k in legacy if k not in ("out", "err")] + ["out_b64", "err_b64"]
+    assert {k: v for k, v in got.items() if k not in ("out", "err")} == slim
+
+
+def test_b64_only_needs_a_binary_reply():
+    res = exact_result(b"x\r\n", b"e")
+    #: Without a binary reply, out and err are the only output: b64_only is
+    #: ignored.
+    for json_output in (1, 2):
+        assert reply_build(res, json_output, b64_only=True, cmd="c") == reply_build(res, json_output, cmd="c")
+    assert wire(reply_build(res, 0, True, b64_only=True)) == wire(reply_build(res, 0, True))
+
+
+@pytest.mark.parametrize("value, want", [(1, True), ("1", True), ("y", True), (0, False), ("", False), ("no", False)])
+def test_b64_only_request_field(value, want):
+    req = request_parse({"cmd": "x", "binary": 1, "json_output": 1, "b64_only": value}, binary_mode=True)
+    assert req.b64_only == want
+    assert not request_parse({"cmd": "x"}, binary_mode=True).b64_only
+    res = exact_result(b"o", b"e")
+    got = json.loads(json_reply(ZshOutcome(res=res), req).body)
+    assert ("out" in got) == (not want) and ("err" in got) == (not want)
+    assert (got["out_b64"], got["err_b64"]) == (b64(b"o"), b64(b"e"))
 
 
 def test_non_binary_replies_have_no_header():
@@ -315,10 +341,11 @@ def test_text_views_with_surrogates_still_encode():
     #: The text views of brish results never hold surrogates with the default
     #: decoding errors; a result built by hand might.
     res = CmdResult(0, "out \udcff", "err \ud800", "cmd", "")
-    _, _, body = wire(reply_build(res, 1, cmd=res.cmd))
-    got = json.loads(body)
-    assert (got["out"], got["err"]) == ("out \\udcff", "err \\ud800")
-    got = json.loads(reply_build(res, 1, True, cmd=res.cmd).body)
+    for binary in (False, True):
+        _, _, body = wire(reply_build(res, 1, binary, cmd=res.cmd))
+        got = json.loads(body)
+        assert (got["out"], got["err"]) == ("out \\udcff", "err \\ud800")
+    got = json.loads(reply_build(res, 1, True, b64_only=True, cmd=res.cmd).body)
     assert base64.b64decode(got["out_b64"]) == b"out \xff"
     assert base64.b64decode(got["err_b64"]) == b"err \\ud800"
     assert wire(reply_build(res, 0))[2] == "out \\udcfferr \\ud800".encode()
@@ -332,5 +359,6 @@ def test_positional_error_result_with_bytes():
     assert (res.outb, res.errb) == (b"", tb.encode())
     res.longstr.encode("utf-8")
     assert reply_build(res, 0, True).body == tb.encode()
-    assert base64.b64decode(json.loads(reply_build(res, 1, True).body)["err_b64"]) == tb.encode()
+    assert json.loads(reply_build(res, 1, True).body)["err"] == tb
+    assert base64.b64decode(json.loads(reply_build(res, 1, True, b64_only=True).body)["err_b64"]) == tb.encode()
     assert wire(reply_build(res, 0)) == wire(legacy_plain(res))

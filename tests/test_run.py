@@ -63,7 +63,7 @@ def test_cmd_and_stdin_arrive_as_sent():
 #: What the endpoint does with one request, minus the worker pool, sessions
 #: and logging. `handle` returns the reply as a Starlette Response.
 HANDLE = r'''
-import base64, json
+import base64, itertools, json
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, Response
 from brishgarden.reply import (
@@ -110,15 +110,17 @@ def test_binary_round_trip():
                 assert plain.media_type == "application/octet-stream"
                 assert plain.body == data, (len(plain.body), len(data))
 
-                for cmd, field in ((b"cat", "out_b64"), (b"cat >&2", "err_b64")):
+                for (cmd, field), b64_only in itertools.product(
+                        ((b"cat", "out_b64"), (b"cat >&2", "err_b64")), (0, 1)):
                     reply = handle(b, {"cmd_b64": b64(cmd), "stdin_b64": b64(data),
-                                       "binary": 1, "json_output": 1})
+                                       "binary": 1, "json_output": 1, "b64_only": b64_only})
                     assert reply.headers[BINARY_HEADER] == "1"
                     got = json.loads(reply.body)
                     assert got["retcode"] == 0, got
                     assert base64.b64decode(got[field]) == data
-                    #: No text fields: they would duplicate the base64 ones.
-                    assert "out" not in got and "err" not in got, sorted(got)
+                    #: b64_only drops the text fields, which duplicate the
+                    #: base64 ones; without it they stay.
+                    assert ("out" in got and "err" in got) == (not b64_only), sorted(got)
         finally:
             b.cleanup()
         """,

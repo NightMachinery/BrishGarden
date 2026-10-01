@@ -16,8 +16,8 @@ Binary transport is opt-in per request (see the readme):
 - `cmd_b64` and `stdin_b64` carry the command and its stdin as base64 of raw
   bytes, and take precedence over `cmd` and `stdin`;
 - `binary: 1` asks for exact output: the plain reply path answers with the
-  raw bytes, and the JSON reply path carries `out_b64` and `err_b64` in
-  place of the text fields `out` and `err`.
+  raw bytes, and the JSON reply path adds `out_b64` and `err_b64`; with
+  `b64_only: 1` too, they replace the text fields `out` and `err`.
 
 Every reply to a `binary: 1` request carries the header `X-Brish-Binary: 1`,
 but only when the garden's Brish runs in binary mode (the default, see
@@ -119,6 +119,9 @@ class ZshRequest:
     binary_requested: bool
     #: The reply is a binary reply: requested, and the garden runs in binary mode.
     binary_reply: bool
+    #: The client sent `b64_only: 1`: a binary JSON reply leaves out the
+    #: text fields `out` and `err`.
+    b64_only: bool = False
     error: Optional[str] = None
     session: Any = ""
     #: The shape of a JSON API reply: `0` is the plain reply path.
@@ -218,6 +221,7 @@ def request_parse(body, *, binary_mode, encoding="utf-8"):
         stdin_display=stdin_display,
         binary_requested=binary_requested,
         binary_reply=binary_reply,
+        b64_only=bool_from_str(body.get("b64_only", "")),
         error=error,
         session=body.get("session", ""),
         json_output=json_output,
@@ -410,7 +414,15 @@ def notice_reply(text, binary=False):
 
 
 def reply_build(
-    res, json_output, binary=False, *, cmd="", session="", brishes=0, all_brishes=0
+    res,
+    json_output,
+    binary=False,
+    *,
+    b64_only=False,
+    cmd="",
+    session="",
+    brishes=0,
+    all_brishes=0,
 ):
     """The reply to a request whose result is the CmdResult `res`.
 
@@ -418,9 +430,12 @@ def reply_build(
       `binary`, it is `res.outb + res.errb` as `application/octet-stream`;
       otherwise the text `res.outerr` as `text/plain`.
     - Otherwise (the JSON reply path): a dict with the command echo, the pool
-      sizes, `out`, `err` and `retcode`. With `binary`, `out_b64` and
-      `err_b64`, the base64 of the exact bytes, replace `out` and `err`,
-      which would only duplicate them (and, for binary data, be larger).
+      sizes, `out`, `err` and `retcode`. With `binary`, also `out_b64` and
+      `err_b64`, the base64 of the exact bytes. With `binary` and
+      `b64_only`, these replace `out` and `err`, which only duplicate them
+      (and, for binary data, are larger). Dropping them is opt-in, because
+      clients such as `brishz_para.dash` read `out` and `err` even when the
+      request asked for `binary: 1`.
 
     A binary reply carries the `X-Brish-Binary: 1` header; the caller passes
     `binary` only when the garden's Brish runs in binary mode. A non-binary
@@ -443,14 +458,14 @@ def reply_build(
         "brishes": brishes,
         "allBrishes": all_brishes,
     }
-    if not binary:
+    if not (binary and b64_only):
         reply["out"] = text_safe(res.out)
         reply["err"] = text_safe(res.err)
-        reply["retcode"] = res.retcode
+    reply["retcode"] = res.retcode
+    if not binary:
         #: FastAPI serializes a returned dict, as it always has.
         return reply
 
-    reply["retcode"] = res.retcode
     reply["out_b64"] = base64.b64encode(res.outb).decode("ascii")
     reply["err_b64"] = base64.b64encode(res.errb).decode("ascii")
     return JSONResponse(content=reply, headers=_binary_headers(True))
@@ -464,6 +479,7 @@ def json_reply(outcome, req, *, brishes=0, all_brishes=0):
         outcome.res,
         req.json_output,
         req.binary_reply,
+        b64_only=req.b64_only,
         cmd=req.cmd_display,
         session=req.session,
         brishes=brishes,

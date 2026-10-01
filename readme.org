@@ -47,19 +47,20 @@ key never leaves the machine that generated it.
 =POST /zsh/= runs a zsh command in one of the garden's Brish workers; =POST /zsh/nolog/= does the same without an access-log line. The JSON body has these fields:
 - =cmd=: the command, as text.
 - =stdin=: its standard input, as text (default: empty).
-- =json_output= (old name =verbose=): =0= (the default) replies with the command's output as =text/plain=, with stderr merged into stdout. Any other value replies with JSON: =cmd=, =session=, =brishes=, =allBrishes=, =out=, =err= and =retcode= (with =binary: 1=, =out_b64= and =err_b64= replace =out= and =err=).
+- =json_output= (old name =verbose=): =0= (the default) replies with the command's output as =text/plain=, with stderr merged into stdout. Any other value replies with JSON: =cmd=, =session=, =brishes=, =allBrishes=, =out=, =err= and =retcode= (with =binary: 1=, also =out_b64= and =err_b64=, see below).
 - =session=: run in a dedicated Brish of that name, created on first use, instead of the shared pool.
 - =nolog=, =log_level= and =failure_expected=: control the garden's logging and its failure notification.
-- =cmd_b64=, =stdin_b64= and =binary=: binary data, see below.
+- =cmd_b64=, =stdin_b64=, =binary= and =b64_only=: binary data, see below.
 
 The command =%GARDEN_ALL= restarts every Brish.
 
 To send and receive exact bytes without JSON or base64, use the raw API (=POST /zsh/raw/=, below) instead.
 
 ** Binary data (opt-in)
-JSON strings cannot carry arbitrary bytes, so three optional fields do it with base64:
+JSON strings cannot carry arbitrary bytes, so optional fields do it with base64:
 - =cmd_b64= and =stdin_b64= hold the command and its stdin as base64 of the raw bytes. They take precedence over =cmd= and =stdin=. Whitespace inside them is ignored.
-- =binary: 1= asks for the exact output. The plain reply (=json_output: 0=) is then the raw bytes of stdout followed by stderr, as =application/octet-stream=. The JSON reply carries =out_b64= and =err_b64=, the base64 of the exact stdout and stderr, in place of the text fields =out= and =err=, which would only duplicate them (and, for binary data, be larger); its other fields are unchanged.
+- =binary: 1= asks for the exact output. The plain reply (=json_output: 0=) is then the raw bytes of stdout followed by stderr, as =application/octet-stream=. The JSON reply adds =out_b64= and =err_b64=, the base64 of the exact stdout and stderr, next to the text fields =out= and =err=.
+- =b64_only: 1=, with =binary: 1=, drops the text fields =out= and =err= from a binary JSON reply, since they only duplicate =out_b64= and =err_b64= (and, for binary data, are larger); the other fields are unchanged. It is opt-in because some clients read =out= and =err= even from a =binary: 1= request (=brishz_para.dash= under =brishz_binary=y=). It has no effect on the plain reply, on a reply without =binary: 1=, or in legacy mode, where a =binary: 1= request is refused. A garden older than this field ignores it and sends the text fields too.
 
 #+begin_example zsh
 curl --header @$HOME/.keys/brishgarden --header 'Content-Type: application/json' \
