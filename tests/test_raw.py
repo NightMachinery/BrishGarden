@@ -12,6 +12,7 @@ from brishgarden.reply import (
     CMD_LENGTH_HEADER,
     NOTICE_HEADER,
     OUT_LENGTH_HEADER,
+    REFUSED_HEADER,
     RETCODE_HEADER,
     STDIN_LOG_LIMIT,
     ZshOutcome,
@@ -158,11 +159,19 @@ def test_parse_refuses_conflicting_repeated_options(name):
 
 
 def test_parse_legacy_mode_decodes_text():
-    req = parse("print -r -- café".encode(), b"a\0b", binary_mode=False)
+    req = parse("print -r -- café".encode(), "a\x01b".encode(), binary_mode=False)
     assert req.error is None
-    #: A NUL reaches brish, which refuses it in legacy mode.
-    assert (req.cmd, req.stdin) == ("print -r -- café", "a\0b")
+    assert (req.cmd, req.stdin) == ("print -r -- café", "a\x01b")
     assert not req.binary_reply
+
+
+@pytest.mark.parametrize("cmd, stdin, what", [(b"cat # \0", b"", "the command"), (b"cat", b"a\0b", "stdin")])
+def test_parse_legacy_mode_refuses_nul(cmd, stdin, what):
+    #: The garden refuses it itself, so that the reply is marked as refused;
+    #: Brish would refuse it too, with a 9000 that looks like a command's own.
+    req = parse(cmd, stdin, binary_mode=False)
+    assert req.error is not None and req.error.startswith(f"brishgarden: {what} contains a NUL byte")
+    assert parse(cmd, stdin, binary_mode=True).error is None
 
 
 @pytest.mark.parametrize("cmd, stdin, what", [(b"\xff", b"", "the command"), (b"cat", b"\xff", "stdin")])
@@ -172,7 +181,7 @@ def test_parse_legacy_mode_refuses_invalid_utf8(cmd, stdin, what):
 
 
 def headers_of(reply):
-    return {k: reply.headers.get(k) for k in (RETCODE_HEADER, OUT_LENGTH_HEADER, BINARY_HEADER, NOTICE_HEADER)}
+    return {k: reply.headers.get(k) for k in (RETCODE_HEADER, OUT_LENGTH_HEADER, BINARY_HEADER, NOTICE_HEADER, REFUSED_HEADER)}
 
 
 @pytest.mark.parametrize("binary", MODES)
@@ -187,6 +196,7 @@ def test_reply_build(binary):
         OUT_LENGTH_HEADER: str(len(ALL_BYTES) + 2),
         BINARY_HEADER: "1" if binary else "0",
         NOTICE_HEADER: None,
+        REFUSED_HEADER: None,
     }
     assert reply.headers["content-length"] == str(len(reply.body))
 
@@ -210,6 +220,7 @@ def test_notice_reply():
         OUT_LENGTH_HEADER: str(len(b"Empty command received.")),
         BINARY_HEADER: "1",
         NOTICE_HEADER: "1",
+        REFUSED_HEADER: None,
     }
     assert raw_notice_reply("x \udcff", False).body == b"x \\udcff"
 
@@ -219,6 +230,11 @@ def test_raw_reply_dispatch():
     assert raw_reply(ZshOutcome(res=res), True).body == b"oe"
     reply = raw_reply(ZshOutcome(notice="n"), False)
     assert reply.body == b"n" and reply.headers[NOTICE_HEADER] == "1"
+    assert REFUSED_HEADER.lower() not in reply.headers
+    refusal = CmdResult(9000, "", "brishgarden: no\n", "", "")
+    reply = raw_reply(ZshOutcome(res=refusal, refused=True), True)
+    assert headers_of(reply)[REFUSED_HEADER] == "1" and headers_of(reply)[RETCODE_HEADER] == "9000"
+    assert headers_of(raw_reply(ZshOutcome(res=refusal), True))[REFUSED_HEADER] is None
 
 
 ###
@@ -233,7 +249,7 @@ def handle(b, cmd, stdin=b"", query=None, **headers):
     hdrs.update({k.replace("_", "-"): v for k, v in headers.items()})
     req = raw_request_parse(cmd + stdin, hdrs, query or {}, binary_mode=b.binary, encoding=b.encoding)
     if req.error is not None:
-        outcome = ZshOutcome(res=CmdResult(9000, "", req.error, req.cmd_display, req.stdin_display))
+        outcome = ZshOutcome(res=CmdResult(9000, "", req.error, req.cmd_display, req.stdin_display), refused=True)
     elif req.cmd_display == "":
         outcome = ZshOutcome(notice="Empty command received.")
     else:
@@ -276,6 +292,12 @@ def test_round_trip_in_garden_mode():
 
             rc, out, err, h = handle(b, b"cat", b"tail", x_brish_cmd_length="9")
             assert rc == 9000 and out == b"" and b"has only 7 bytes" in err, err
+            assert h["x-brish-refused"] == "1"
+
+            #: A command that ran is never marked refused, even when it looks
+            #: like a refusal.
+            rc, out, err, h = handle(b, b"print -rnu2 -- 'brishgarden: no'; return 9000")
+            assert (rc, err) == (9000, b"brishgarden: no") and "x-brish-refused" not in h
         finally:
             b.cleanup()
         """
@@ -322,14 +344,16 @@ def test_round_trip_legacy_mode():
         sentinel = os.path.join(os.getcwd(), "sentinel")
         try:
             assert not b.binary
-            #: brish refuses a NUL in legacy mode, before running anything.
+            #: The garden refuses a NUL in legacy mode, before running anything.
             rc, out, err, h = handle(b, b"print -rn -- ran >> sentinel; cat", b"a\0b")
-            assert (rc, h["x-brish-binary"]) == (9000, "0"), (rc, err)
+            assert (rc, h["x-brish-binary"], h["x-brish-refused"]) == (9000, "0", "1"), (rc, err)
+            assert b"stdin contains a NUL byte" in err, err
             rc, out, err, h = handle(b, b"print -rn -- ran >> sentinel # \0")
-            assert rc == 9000, (rc, err)
+            assert (rc, h["x-brish-refused"]) == (9000, "1"), (rc, err)
             #: Non-UTF-8 is refused by the garden, since legacy mode carries text.
             rc, out, err, h = handle(b, b"print -rn -- ran >> sentinel # \xff")
             assert rc == 9000 and b"not valid utf-8" in err, err
+            assert h["x-brish-refused"] == "1"
             assert not os.path.exists(sentinel)
 
             rc, out, err, h = handle(b, b"cat", x_brish_stdin="null")

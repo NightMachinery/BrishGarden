@@ -197,7 +197,7 @@ def zsh_handle(request: Request, decode):
         if not failure_expected and log_level >= 1:
             nolog or logger.warning(f"Request refused:\n{res.longstr}")
 
-        return req, ZshOutcome(res=res)
+        return req, ZshOutcome(res=res, refused=True)
 
     if cmd == "":
         return req, ZshOutcome(notice="Empty command received.")

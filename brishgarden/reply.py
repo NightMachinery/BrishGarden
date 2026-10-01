@@ -68,6 +68,11 @@ STDIN_HEADER = "X-Brish-Stdin"
 RETCODE_HEADER = "X-Brish-Retcode"
 OUT_LENGTH_HEADER = "X-Brish-Out-Length"
 NOTICE_HEADER = "X-Brish-Notice"
+#: Set on a reply for a request that ran nothing (a malformed request, or
+#: input that legacy mode cannot carry), so a client can retry it elsewhere
+#: without running it twice. A command that ran never gets it, whatever its
+#: retcode and stderr.
+REFUSED_HEADER = "X-Brish-Refused"
 #: ASCII digits only (`\d` would also match other scripts' digits).
 _DECIMAL = re.compile("[0-9]+")
 
@@ -143,6 +148,8 @@ class ZshOutcome:
 
     res: Optional[CmdResult] = None
     notice: Optional[str] = None
+    #: The garden refused the request before running anything.
+    refused: bool = False
 
 
 def _payload(body, name):
@@ -364,6 +371,15 @@ def raw_request_parse(body, headers, query, *, binary_mode, encoding="utf-8"):
         if not binary_mode:
             cmd = _legacy_text(cmd, "the command", encoding)
             stdin = "" if stdin is None else _legacy_text(stdin, "stdin", encoding)
+            #: Brish would refuse a NUL too, but with a 9000 that looks like
+            #: a command's own; refusing here marks the reply as refused.
+            for value, what in ((cmd, "the command"), (stdin, "stdin")):
+                if "\0" in value:
+                    raise RequestError(
+                        f"brishgarden: {what} contains a NUL byte; this garden's"
+                        " Brish runs in legacy (text) mode, which cannot carry one."
+                        f" {LEGACY_FIX}\n"
+                    )
     except RequestError as e:
         error = str(e)
         cmd = stdin = ""
@@ -487,7 +503,7 @@ def json_reply(outcome, req, *, brishes=0, all_brishes=0):
     )
 
 
-def _raw_headers(retcode, out_length, binary, notice=False):
+def _raw_headers(retcode, out_length, binary, notice=False, refused=False):
     headers = {
         RETCODE_HEADER: str(retcode),
         OUT_LENGTH_HEADER: str(out_length),
@@ -495,19 +511,22 @@ def _raw_headers(retcode, out_length, binary, notice=False):
     }
     if notice:
         headers[NOTICE_HEADER] = "1"
+    if refused:
+        headers[REFUSED_HEADER] = "1"
     return headers
 
 
-def raw_reply_build(res, binary):
+def raw_reply_build(res, binary, refused=False):
     """The raw API's reply to a request whose result is the CmdResult `res`:
     stdout's bytes then stderr's, with the retcode and stdout's length in
     headers. `binary` is whether the garden runs in binary mode, that is,
-    whether the bytes are exact."""
+    whether the bytes are exact. `refused` marks a request that ran nothing
+    (`X-Brish-Refused: 1`)."""
     outb, errb = bytes(res.outb), bytes(res.errb)
     return Response(
         content=outb + errb,
         media_type="application/octet-stream",
-        headers=_raw_headers(res.retcode, len(outb), binary),
+        headers=_raw_headers(res.retcode, len(outb), binary, refused=refused),
     )
 
 
@@ -526,4 +545,4 @@ def raw_reply(outcome, binary):
     """The raw API's reply for the ZshOutcome `outcome`."""
     if outcome.notice is not None:
         return raw_notice_reply(outcome.notice, binary)
-    return raw_reply_build(outcome.res, binary)
+    return raw_reply_build(outcome.res, binary, refused=outcome.refused)
