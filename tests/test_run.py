@@ -188,7 +188,12 @@ def test_non_opt_in_replies_match_across_modes():
 
             cr = {"cmd": "print -rn -- $'a\\r\\nb\\rc\\r'"}
             assert handle(bb, cr).body == b"a\r\nb\rc\r"
-            assert handle(bl, cr).body == b"a\nb\nc"
+            #: Legacy mode lost a CR until Brish's legacy backports (2026-10),
+            #: which made its text views exact too.
+            if bl.send_cmd("print -rn -- $'\\r'").out == "\r":
+                assert handle(bl, cr).body == b"a\r\nb\rc\r"
+            else:
+                assert handle(bl, cr).body == b"a\nb\nc"
         finally:
             bb.cleanup()
             bl.cleanup()
