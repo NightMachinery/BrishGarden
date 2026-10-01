@@ -14,6 +14,7 @@ from collections.abc import Iterable
 
 from fastapi import Depends, FastAPI, Response, Request
 
+from brishgarden.mode import garden_mode_get
 from brishgarden.reply import (
     RETCODE_GARDEN_ERROR,
     brish_run,
@@ -51,10 +52,20 @@ except:
 
 executor = async_max_workers_set(brishes_n + 16)
 ###
+#: Binary mode by default; `BRISH_BINARY=0` selects legacy mode. Every Brish
+#: the garden creates gets it as `binary=`, and the garden never writes
+#: BRISH_BINARY into its environment, which its commands inherit. See
+#: brishgarden/mode.py.
+garden_mode = garden_mode_get(os.environ, brish.Brish)
+if garden_mode.note:
+    logger.warning(garden_mode.note)
+
+
 def newBrish(session="", **kwargs):
     return brish.Brish(
         #: FORCE_INTERACTIVE is set by tmuxnewsh2
         boot_cmd="export GARDEN_ZSH=y ; export GARDEN_SESSION={session} ; unset FORCE_INTERACTIVE ; garden_root=~/tmp/garden/ ; mkdir -p $garden_root ; cd $garden_root ",
+        **garden_mode.brish_kwargs,
         **kwargs,
     )
 
@@ -95,13 +106,13 @@ def init_brishes(erase_sessions=True):
 
 
 def garden_binary_p():
-    """Whether the garden's Brish runs in binary mode (env var BRISH_BINARY)."""
+    """Whether the garden's Brish runs in binary mode (`garden_mode`)."""
     return bool(getattr(brish_server, "binary", False))
 
 
 allBrishes = None
 brish_server = None
-logger.info(f"Initializing {brishes_n} brishes ...")
+logger.info(f"Initializing {brishes_n} brishes in {garden_mode.name} mode ...")
 init_brishes()
 zn("bell_awaysh=no bell-sc2-nav_online || true")
 

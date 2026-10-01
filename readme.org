@@ -67,17 +67,26 @@ curl --header @$HOME/.keys/brishgarden --header 'Content-Type: application/json'
 
 Here ~Y2F0~ is =cat= and ~/wA=~ is the two bytes =\xff\0=, which come back unchanged.
 
-Exact bytes need the garden's Brish to run in binary mode: start the garden process with =BRISH_BINARY=1= (see "Binary Data" in Brish's readme). Such a garden marks every reply to a =binary: 1= request with the header =X-Brish-Binary: 1= (it goes out lowercased, as =x-brish-binary=; header names are case-insensitive). Other gardens never send it:
-- a garden whose Brish runs in legacy mode refuses a =binary: 1= request without running it, and replies with retcode 9000 and a message that says so;
+Exact bytes need the garden's Brish to run in binary mode (see "Binary Data" in Brish's readme), which is the garden's default; =BRISH_BINARY=0= turns it off (see "environment variables" below). A garden in binary mode marks every reply to a =binary: 1= request with the header =X-Brish-Binary: 1= (it goes out lowercased, as =x-brish-binary=; header names are case-insensitive). Other gardens never send it:
+- a garden whose Brish runs in legacy mode (started with =BRISH_BINARY=0=, or with a brish too old for binary mode) refuses a =binary: 1= request without running it, and replies with retcode 9000 and a message that says so;
 - a garden older than these fields ignores them, so a request that carries its command only in =cmd_b64= gets "Empty command received." and nothing runs.
 
 So a client that needs exact output should check for the header, and fail when it is missing: then nothing ran.
 
 Without =binary: 1=, the =_b64= fields still deliver exact input, and the reply is the usual text reply. A garden in legacy mode accepts them only when they decode as UTF-8, since it carries text; otherwise it refuses the request before running anything. A malformed request (invalid base64, a field that is not a string) is refused the same way, with retcode 9000.
 
-Requests without the new fields get the same replies as before. From a garden in legacy mode they are byte-identical. In binary mode the text views are exact, so replies differ only where legacy mode lost information: a =\r= is kept, where legacy mode turns =\r\n= and a lone =\r= into a newline and drops a trailing =\r=; and a NUL in the output no longer desynchronizes the worker. Binary mode also changes how some commands end (=exit=, NOMATCH errors, =errexit=); see Brish's readme. In both modes, a lone surrogate in a text field of the reply (a JSON request can smuggle one in with a =\udcff= escape) is escaped as text, where it used to make the reply fail.
+Requests without the new fields get the replies they always got, with the differences below in binary mode. From a garden in legacy mode they are byte-identical to the replies of a garden older than these fields, so =BRISH_BINARY=0= is also the way back to the old replies. In binary mode, the default, the text views are exact, so replies differ only where legacy mode lost information: a =\r= is kept, where legacy mode turns =\r\n= and a lone =\r= into a newline and drops a trailing =\r=; and a NUL in the output no longer desynchronizes the worker. Binary mode also changes how some commands end (=exit=, NOMATCH errors, =errexit=); see Brish's readme. In both modes, a lone surrogate in a text field of the reply (a JSON request can smuggle one in with a =\udcff= escape) is escaped as text, where it used to make the reply fail.
 
 * environment variables
 ** =BRISHGARDEN_N= sets the number of Brishes started by default
-** =BRISH_BINARY=1= runs the garden's Brishes in binary mode
-Brish reads it when each Brish starts, so changing it needs a restart of the garden process; =%GARDEN_ALL= keeps the process's mode.
+** =BRISH_BINARY=0= runs the garden's Brishes in legacy mode
+The garden runs every Brish it creates (the shared pool, the session Brishes, and the pool that =%GARDEN_ALL= rebuilds) in one mode, binary by default. It reads =BRISH_BINARY= once, when the process starts:
+- unset or empty: binary mode;
+- a false value (=0=, =n=, =no= or =false=, in any case): legacy mode, the text transport of gardens older than binary mode;
+- any other value, such as =1=: binary mode.
+
+So changing it needs a restart of the garden process; =%GARDEN_ALL= keeps the mode. The startup log line =Initializing N brishes in binary mode ...= names it.
+
+Brish itself treats an unset =BRISH_BINARY= as legacy mode, and the garden leaves the variable alone: it passes the mode to each Brish as an argument instead of setting it. Commands the garden runs inherit its environment, so a Python script they start keeps Brish's own default.
+
+With a brish too old for binary mode (its =Brish()= takes no =binary= argument), the garden runs in legacy mode and logs one warning that says so.

@@ -3,6 +3,8 @@ timeout."""
 
 import textwrap
 
+import pytest
+
 from tests.conftest import run_py
 
 
@@ -10,7 +12,7 @@ def test_plain_path_merges_stderr():
     run_py(
         r"""
         from brishgarden.reply import brish_run
-        b = Brish(server_count=1)
+        b = garden_brish(server_count=1)
         try:
             res = brish_run(b, "print -r -- out; print -r -- err >&2; print -r -- out2",
                             "", json_output=0, server_index=0)
@@ -27,7 +29,7 @@ def test_json_path_keeps_streams_apart():
     run_py(
         r"""
         from brishgarden.reply import brish_run
-        b = Brish(server_count=1)
+        b = garden_brish(server_count=1)
         try:
             res = brish_run(b, "print -r -- out; print -r -- err >&2; return 3",
                             "", json_output=1, server_index=0)
@@ -42,7 +44,7 @@ def test_cmd_and_stdin_arrive_as_sent():
     run_py(
         r"""
         from brishgarden.reply import brish_run
-        b = Brish(server_count=1)
+        b = garden_brish(server_count=1)
         cmd = "x='a  b' ; print -r -- \"$x\" '$HOME' ; cat"
         try:
             for json_output in (0, 1):
@@ -249,4 +251,89 @@ def test_binary_request_errors_carry_the_header():
         finally:
             b.cleanup()
         """
+    )
+
+
+###
+#: The garden's mode, chosen by `BRISH_BINARY` (brishgarden/mode.py).
+
+#: (BRISH_BINARY in the garden's environment, or None for unset; binary mode?)
+GARDEN_ENVS = [(None, True), ("", True), ("1", True), ("0", False), ("no", False)]
+
+
+@pytest.mark.parametrize("value, binary", GARDEN_ENVS)
+def test_garden_mode_follows_env(value, binary):
+    #: The garden's workers run in the mode BRISH_BINARY selects, and the
+    #: garden leaves BRISH_BINARY alone: its commands see the environment the
+    #: garden was started with, and a Python script that a command starts
+    #: keeps brish's library default (legacy when unset).
+    run_py(
+        r"""
+        import sys
+        want = {value!r}
+        before = dict(os.environ)
+        b = garden_brish(server_count=1)
+        try:
+            assert (GARDEN_MODE.binary, b.binary) == ({binary!r}, {binary!r}), GARDEN_MODE
+            assert dict(os.environ) == before
+            res = b.send_cmd('print -r -- "${{BRISH_BINARY-<unset>}}"')
+            assert res.out == ("<unset>" if want is None else want) + "\n", res
+            script = "import brish; print(brish.Brish(delayed_init=True).binary)"
+            res = b.z("{{exe}} -c {{script}}", locals_={{"exe": sys.executable, "script": script}})
+            library_default = want is not None and want not in ("", "0", "no")
+            assert (res.retcode, res.out) == (0, f"{{library_default}}\n"), res
+        finally:
+            b.cleanup()
+        """.format(value=value, binary=binary),
+        env={"BRISH_BINARY": value},
+    )
+
+
+def test_default_serves_binary_requests():
+    #: With BRISH_BINARY unset, a `binary: 1` request gets exact bytes.
+    run_handle(
+        r"""
+        b = garden_brish(server_count=1)
+        try:
+            assert b.binary
+            reply = handle(b, {"cmd_b64": b64(b"cat"), "stdin_b64": b64(b"\xff\0\r\n"), "binary": 1})
+            assert reply.headers[BINARY_HEADER] == "1"
+            assert reply.body == b"\xff\0\r\n", reply.body
+        finally:
+            b.cleanup()
+        """,
+        env={"BRISH_BINARY": None},
+    )
+
+
+def test_kill_switch_refuses_binary_requests():
+    #: BRISH_BINARY=0 runs the garden in legacy mode: a `binary: 1` request
+    #: is refused, and nothing runs.
+    run_handle(
+        r"""
+        from brishgarden.reply import LEGACY_REFUSAL
+        b = garden_brish(server_count=1)
+        sentinel = os.path.join(os.getcwd(), "sentinel")
+        try:
+            assert not b.binary
+            for json_output in (0, 1):
+                body = {"cmd_b64": b64(b"print -rn -- ran >> sentinel"), "binary": 1,
+                        "json_output": json_output}
+                reply = handle(b, body)
+                assert BINARY_HEADER not in reply.headers
+                if json_output:
+                    got = json.loads(reply.body)
+                    assert (got["retcode"], got["err"]) == (9000, LEGACY_REFUSAL), got
+                else:
+                    assert reply.body == LEGACY_REFUSAL.encode(), reply.body
+            assert "without BRISH_BINARY=0" in LEGACY_REFUSAL
+            assert not os.path.exists(sentinel)
+
+            #: Requests that do not opt in still run, as text.
+            reply = handle(b, {"cmd": "print -r -- hi", "json_output": 1})
+            assert json.loads(reply.body)["out"] == "hi\n"
+        finally:
+            b.cleanup()
+        """,
+        env={"BRISH_BINARY": "0"},
     )

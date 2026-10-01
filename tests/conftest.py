@@ -11,11 +11,14 @@ Tests that run real zsh workers do so in a child Python process through
 processes behind, it kills them by explicit PID, found through
 `ps -Ao pid,ppid,pgid` (each child runs in its own session).
 
-The suite runs in two modes, selected by `BRISH_BINARY` exactly as brish
-reads it. Run it twice:
+The suite runs in two modes, selected by `BRISH_BINARY` exactly as the
+garden reads it (see `brishgarden/mode.py`): unset, empty or true is binary
+mode, the garden's default, and a false value such as `0` is legacy mode.
+Workers that stand in for the garden's are made with `garden_brish`, in the
+garden's mode. Run it twice:
 
     python -m pytest -q
-    BRISH_BINARY=1 python -m pytest -q
+    BRISH_BINARY=0 python -m pytest -q
 
 To test an unreleased brish checkout, put it first on PYTHONPATH and name it
 in BRISHGARDEN_TEST_BRISH_ROOT; the guard tests then check that it is the
@@ -46,7 +49,14 @@ def _bool_from_str(value):
     return bool(value)
 
 
-BINARY = _bool_from_str(os.environ.get("BRISH_BINARY", ""))
+def garden_binary(environ):
+    #: Same rule as `brishgarden.mode.garden_binary_from_env` (test_mode.py
+    #: checks that they agree): unset or empty means binary.
+    value = environ.get("BRISH_BINARY", "")
+    return value == "" or _bool_from_str(value)
+
+
+BINARY = garden_binary(os.environ)
 MODE = "binary" if BINARY else "legacy"
 
 binary_only = pytest.mark.skipif(not BINARY, reason="binary mode only")
@@ -59,7 +69,7 @@ EMPTY_ZDOTDIR.mkdir()
 
 def pytest_report_header(config):
     return (
-        f"brish mode: {MODE} (BRISH_BINARY={os.environ.get('BRISH_BINARY', '')!r});"
+        f"garden mode: {MODE} (BRISH_BINARY={os.environ.get('BRISH_BINARY', '')!r});"
         f" root: {ROOT}; {BRISH_ROOT_VAR}: {BRISH_ROOT!r}"
     )
 
@@ -131,25 +141,42 @@ assert Path(brishgarden.__file__).resolve().is_relative_to(ROOT), brishgarden.__
 if BRISH_ROOT:
     assert Path(brish.__file__).resolve().is_relative_to(Path(BRISH_ROOT).resolve()), brish.__file__
 from brish import Brish, CmdResult
+from brishgarden.mode import garden_mode_get
+#: The garden's mode under this child's environment.
 BINARY = {binary!r}
+GARDEN_MODE = garden_mode_get(os.environ, Brish)
+assert GARDEN_MODE.binary == BINARY, (GARDEN_MODE, BINARY)
+
+#: A Brish in the garden's mode, as the garden's `newBrish` makes them.
+def garden_brish(**kw):
+    return Brish(**GARDEN_MODE.brish_kwargs, **kw)
 """
 
 
-def run_py(code, timeout=60):
+def run_py(code, timeout=60, env=None):
     """Run `code` in a child python with a timeout; fail the test unless the
     child exits 0 without leaving processes behind. Returns a ChildResult.
 
-    The child's zsh workers start with ZDOTDIR pointing at an empty
-    directory, so they start fast and ignore the user's startup files.
+    `env` maps variables to set in the child's environment, or to remove
+    with None. The child's zsh workers start with ZDOTDIR pointing at an
+    empty directory, so they start fast and ignore the user's startup files.
     """
     scratch = tempfile.mkdtemp(prefix="child-", dir=_SCRATCH)
+    overrides = env or {}
     env = dict(os.environ)
+    for name, value in overrides.items():
+        if value is None:
+            env.pop(name, None)
+        else:
+            env[name] = value
     env["PYTHONPATH"] = os.pathsep.join(
         [str(ROOT)] + [p for p in env.get("PYTHONPATH", "").split(os.pathsep) if p]
     )
     env["TMPDIR"] = scratch
     env["ZDOTDIR"] = str(EMPTY_ZDOTDIR)
-    src = PRELUDE.format(root=str(ROOT), brish_root=BRISH_ROOT, binary=BINARY) + textwrap.dedent(code)
+    src = PRELUDE.format(
+        root=str(ROOT), brish_root=BRISH_ROOT, binary=garden_binary(env)
+    ) + textwrap.dedent(code)
     p = subprocess.Popen(
         [sys.executable, "-c", src],
         env=env,

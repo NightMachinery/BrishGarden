@@ -11,9 +11,10 @@ Binary transport is opt-in per request (see the readme):
   raw bytes, and the JSON reply path adds `out_b64` and `err_b64`.
 
 Every reply to a `binary: 1` request carries the header `X-Brish-Binary: 1`,
-but only when the garden's Brish runs in binary mode (`BRISH_BINARY=1`). A
-garden in legacy mode refuses such a request without running it, so a client
-that does not see the header knows that nothing ran.
+but only when the garden's Brish runs in binary mode (the default, see
+`brishgarden/mode.py`). A garden in legacy mode (`BRISH_BINARY=0`, or a brish
+too old for binary mode) refuses such a request without running it, so a
+client that does not see the header knows that nothing ran.
 """
 
 import base64
@@ -32,10 +33,15 @@ BINARY_HEADER = "X-Brish-Binary"
 #: raised while running it.
 RETCODE_GARDEN_ERROR = 9000
 
+#: How to leave legacy mode, for the refusals below.
+LEGACY_FIX = (
+    "To run in binary mode (the default), restart the garden process without"
+    " BRISH_BINARY=0, and upgrade brish if it is too old for binary mode."
+)
+
 LEGACY_REFUSAL = (
     "brishgarden: this garden's Brish runs in legacy (text) mode, so it cannot"
-    " serve a binary request; restart the garden process with BRISH_BINARY=1."
-    " Nothing was run.\n"
+    f" serve a binary request. {LEGACY_FIX} Nothing was run.\n"
 )
 
 _BYTES_LIKE = (bytes, bytearray, memoryview)
@@ -124,7 +130,7 @@ def _legacy_text(value, name, encoding):
         raise RequestError(
             f"brishgarden: {name}_b64 is not valid {encoding} ({e}); this garden's"
             " Brish runs in legacy (text) mode, which carries text only."
-            " Restart the garden process with BRISH_BINARY=1 to send raw bytes.\n"
+            f" {LEGACY_FIX}\n"
         ) from None
 
 
