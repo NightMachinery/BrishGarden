@@ -13,6 +13,7 @@ from typing import Optional
 from collections.abc import Iterable
 
 from fastapi import Depends, FastAPI, Response, Request
+from starlette.concurrency import run_in_threadpool
 
 from brishgarden.mode import garden_mode_get
 from brishgarden.reply import (
@@ -20,6 +21,8 @@ from brishgarden.reply import (
     ZshOutcome,
     brish_run,
     json_reply,
+    raw_reply,
+    raw_request_parse,
     request_parse,
 )
 
@@ -41,7 +44,17 @@ isDbg = os.environ.get(
 if isDbg:
     logger.info("Debug mode enabled")
 
-skip_paths=("/zsh/nolog/", "/api/v1/zsh/nolog/")
+class PathSet(tuple):
+    """Paths, matched without any query string: uvicorn's access log line
+    carries the query string, and a raw API request often has one."""
+
+    def __contains__(self, path):
+        return tuple.__contains__(self, str(path).partition("?")[0])
+
+
+skip_paths = PathSet(
+    ("/zsh/nolog/", "/api/v1/zsh/nolog/", "/zsh/raw/nolog/", "/api/v1/zsh/raw/nolog/")
+)
 logging.getLogger("uvicorn.access").addFilter(EndpointLoggingFilter1(isDbg=isDbg, logger=logger, skip_paths=skip_paths))
 ###
 brishes_n_default = 16
@@ -171,6 +184,8 @@ def zsh_handle(request: Request, decode):
         log+=", failure_expected"
     if req.binary_requested:
         log+=", binary"
+    if req.raw:
+        log+=", raw"
 
     nolog or logger.info(log)
     first_seen and log_tlg(log)
@@ -278,6 +293,39 @@ def cmd_zsh(body: dict, request: Request):
         )
     except:
         logger.warning(traceback.format_exc())
+
+
+def cmd_zsh_raw_sync(request: Request, body: bytes):
+    binary = garden_binary_p()
+    try:
+        req, outcome = zsh_handle(
+            request,
+            lambda: raw_request_parse(
+                body,
+                request.headers,
+                request.query_params,
+                binary_mode=binary,
+                encoding=getattr(brish_server, "encoding", "utf-8"),
+            ),
+        )
+        return raw_reply(outcome, req.binary_reply)
+    except:
+        tb = traceback.format_exc()
+        logger.warning(tb)
+        return raw_reply(
+            ZshOutcome(res=CmdResult(RETCODE_GARDEN_ERROR, "", tb, "", "")), binary
+        )
+
+
+@app.post("/zsh/raw/")
+@app.post("/zsh/raw/nolog/")
+async def cmd_zsh_raw(request: Request):
+    """The raw API: the body is the command's bytes, then its stdin's; see
+    `raw_request_parse` and the readme. Reading the body needs an async
+    endpoint, so the command runs in the thread pool, as a sync endpoint's
+    would, and never blocks the event loop."""
+    body = await request.body()
+    return await run_in_threadpool(cmd_zsh_raw_sync, request, body)
 
 
 ## Security: every endpoint requires the `X-API-Key` header (see the app above).

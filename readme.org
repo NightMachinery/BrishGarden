@@ -54,6 +54,8 @@ key never leaves the machine that generated it.
 
 The command =%GARDEN_ALL= restarts every Brish.
 
+To send and receive exact bytes without JSON or base64, use the raw API (=POST /zsh/raw/=, below) instead.
+
 ** Binary data (opt-in)
 JSON strings cannot carry arbitrary bytes, so three optional fields do it with base64:
 - =cmd_b64= and =stdin_b64= hold the command and its stdin as base64 of the raw bytes. They take precedence over =cmd= and =stdin=. Whitespace inside them is ignored.
@@ -76,6 +78,36 @@ So a client that needs exact output should check for the header, and fail when i
 Without =binary: 1=, the =_b64= fields still deliver exact input, and the reply is the usual text reply. A garden in legacy mode accepts them only when they decode as UTF-8, since it carries text; otherwise it refuses the request before running anything. A malformed request (invalid base64, a field that is not a string) is refused the same way, with retcode 9000.
 
 Requests without the new fields get the replies they always got, with the differences below in binary mode. From a garden in legacy mode they are byte-identical to the replies of a garden older than these fields, so =BRISH_BINARY=0= is also the way back to the old replies. In binary mode, the default, the text views are exact, so replies differ only where legacy mode lost information: a =\r= is kept, where legacy mode turns =\r\n= and a lone =\r= into a newline and drops a trailing =\r=; and a NUL in the output no longer desynchronizes the worker. Binary mode also changes how some commands end (=exit=, NOMATCH errors, =errexit=); see Brish's readme. In both modes, a lone surrogate in a text field of the reply (a JSON request can smuggle one in with a =\udcff= escape) is escaped as text, where it used to make the reply fail.
+
+** Raw API
+=POST /zsh/raw/= runs a command like =/zsh/=, but carries bytes as bytes in both directions, with no JSON and no base64. =POST /zsh/raw/nolog/= is its variant without an access-log line (the =nolog= routes hide that line also when the URL has a query string). It needs the =X-API-Key= header like every endpoint.
+
+The request:
+- The body is the command's bytes followed by its stdin's bytes.
+- The header =X-Brish-Cmd-Length= (required) gives the command's length in bytes, in decimal. The command never goes in a header, since servers and proxies limit header sizes.
+- The optional header =X-Brish-Stdin: null= makes stdin =/dev/null=; the body must then end with the command. (A garden in legacy mode has no =/dev/null= stdin and runs the command with empty stdin.)
+- Options are query parameters, with the meanings of the JSON fields: =session=, =nolog=, =log_level=, =failure_expected=, and =merge=1=, which merges stderr into stdout in the shell, like the JSON API's plain reply path. Boolean values follow Brish's =bool_from_str=: empty, =0=, =n=, =no= and =false= are false.
+
+The reply is HTTP 200 for every request the garden understood, as =application/octet-stream=:
+- The body is stdout's bytes followed by stderr's. With =merge=1=, stderr is normally empty, so the body is the merged stream.
+- =X-Brish-Retcode= is the command's exit status, and =X-Brish-Out-Length= the length of the stdout part in bytes; the rest of the body is stderr.
+- =X-Brish-Binary= is =1= when the garden runs in binary mode, so the bytes are exact, and =0= in legacy mode, where they went through text (see "Binary data" above). A legacy-mode garden still serves the raw API: it decodes the command and stdin strictly as UTF-8, refusing anything else, and its Brish refuses a NUL, both with retcode 9000.
+- A notice that is not a command's output (an empty command, a magic command such as =%GARDEN_ALL=) has =X-Brish-Notice: 1=, the notice text as the stdout part, and retcode 0.
+- A malformed request (no =X-Brish-Cmd-Length=, one that is not a decimal number or exceeds the body, =X-Brish-Stdin= with another value or with a stdin part, a =log_level= that is not an integer) runs nothing and gets retcode 9000, with the message as the stderr part. So does a request whose run raised an exception, with the traceback as the stderr part, as on the JSON API.
+
+Logging, the first-seen IP notification, =log_level= and =failure_expected= work exactly as on the JSON API: both APIs share one code path, and only the decoding and the reply differ. The access log marks a raw request with =, raw=.
+
+#+begin_example zsh
+cmd='cat; print -rn -- done >&2'
+print -rn -- "$cmd"$'\xff\0' |
+    curl --silent --header @$HOME/.keys/brishgarden --header 'Content-Type: application/octet-stream' \
+         --header "X-Brish-Cmd-Length: $(print -rn -- "$cmd" | wc -c | tr -d ' ')" --data-binary @- \
+         --dump-header /dev/stderr 'http://127.0.0.1:7230/zsh/raw/?session=demo' | od -c
+#+end_example
+
+Here the reply body is the two bytes =\xff\0= from stdout and then =done= from stderr, with =x-brish-out-length: 2=. The length counts bytes, which =wc -c= does; zsh's =${#cmd}= counts characters.
+
+A garden older than the raw API answers =404= for these routes, without running anything. A client can rely on that to fall back to the JSON API, knowing that nothing ran.
 
 * environment variables
 ** =BRISHGARDEN_N= sets the number of Brishes started by default

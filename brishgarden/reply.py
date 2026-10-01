@@ -6,7 +6,11 @@ it can be imported (and tested) without side effects.
 
 A request goes through three steps. Decoding turns it into a `ZshRequest`;
 the garden's `zsh_handle` logs it and runs it, giving a `ZshOutcome`; and a
-reply builder turns that outcome into the endpoint's reply.
+reply builder turns that outcome into the endpoint's reply. There are two
+APIs, which share the middle step:
+- the JSON API (`/zsh/`): `request_parse` and `json_reply`;
+- the raw API (`/zsh/raw/`), which carries bytes as bytes in both
+  directions: `raw_request_parse` and `raw_reply`.
 
 Binary transport is opt-in per request (see the readme):
 - `cmd_b64` and `stdin_b64` carry the command and its stdin as base64 of raw
@@ -55,6 +59,16 @@ _B64_SPACE = re.compile(r"[ \t\r\n]+")
 
 #: Characters of stdin that the access log shows.
 STDIN_LOG_LIMIT = 100
+
+#: The raw API's headers. Starlette sends header names lowercased; they are
+#: case-insensitive.
+CMD_LENGTH_HEADER = "X-Brish-Cmd-Length"
+STDIN_HEADER = "X-Brish-Stdin"
+RETCODE_HEADER = "X-Brish-Retcode"
+OUT_LENGTH_HEADER = "X-Brish-Out-Length"
+NOTICE_HEADER = "X-Brish-Notice"
+#: ASCII digits only (`\d` would also match other scripts' digits).
+_DECIMAL = re.compile("[0-9]+")
 
 
 class RequestError(ValueError):
@@ -113,6 +127,8 @@ class ZshRequest:
     nolog: bool = False
     log_level: int = 1
     failure_expected: bool = False
+    #: The request came through the raw API.
+    raw: bool = False
 
 
 @dataclass(frozen=True)
@@ -145,15 +161,16 @@ def _payload(body, name):
     return value
 
 
-def _legacy_text(value, name, encoding):
-    """Legacy mode carries text only: decode a bytes payload strictly."""
+def _legacy_text(value, what, encoding):
+    """Legacy mode carries text only: decode a bytes payload strictly.
+    `what` names the payload in the error message."""
     if not isinstance(value, bytes):
         return value
     try:
         return value.decode(encoding)
     except UnicodeDecodeError as e:
         raise RequestError(
-            f"brishgarden: {name}_b64 is not valid {encoding} ({e}); this garden's"
+            f"brishgarden: {what} is not valid {encoding} ({e}); this garden's"
             " Brish runs in legacy (text) mode, which carries text only."
             f" {LEGACY_FIX}\n"
         ) from None
@@ -187,8 +204,8 @@ def request_parse(body, *, binary_mode, encoding="utf-8"):
         if not binary_mode:
             if binary_requested:
                 raise RequestError(LEGACY_REFUSAL)
-            cmd = _legacy_text(cmd, "cmd", encoding)
-            stdin = _legacy_text(stdin, "stdin", encoding)
+            cmd = _legacy_text(cmd, "cmd_b64", encoding)
+            stdin = _legacy_text(stdin, "stdin_b64", encoding)
     except RequestError as e:
         error = str(e)
         cmd = stdin = ""
@@ -207,6 +224,108 @@ def request_parse(body, *, binary_mode, encoding="utf-8"):
         nolog=bool(body.get("nolog", "")),
         log_level=log_level,
         failure_expected=bool(body.get("failure_expected", False)),
+    )
+
+
+def _raw_options(query, opts):
+    """Fill the dict `opts` with the raw API's options (`ZshRequest` fields)
+    from its query parameters. Raises RequestError for a bad `log_level`,
+    after setting the others, so a refusal still honors failure_expected."""
+    opts["session"] = query.get("session", "")
+    opts["failure_expected"] = bool_from_str(query.get("failure_expected", ""))
+    opts["nolog"] = bool_from_str(query.get("nolog", ""))
+    opts["merge"] = bool_from_str(query.get("merge", ""))
+    log_level = query.get("log_level")
+    if log_level is not None:
+        try:
+            opts["log_level"] = int(log_level)
+        except ValueError:
+            raise RequestError(
+                f"brishgarden: log_level must be an integer, not {log_level!r}\n"
+            ) from None
+
+
+def _raw_payloads(body, headers):
+    """Split a raw request body into (cmd, stdin) bytes; stdin is None for
+    `X-Brish-Stdin: null`. Raises RequestError for a malformed request."""
+    length = headers.get(CMD_LENGTH_HEADER.lower())
+    if length is None:
+        raise RequestError(
+            f"brishgarden: a raw request needs the header {CMD_LENGTH_HEADER}:"
+            " the command's length in bytes\n"
+        )
+    length = length.strip()
+    if _DECIMAL.fullmatch(length) is None:
+        raise RequestError(
+            f"brishgarden: {CMD_LENGTH_HEADER} must be a decimal number of bytes,"
+            f" not {length!r}\n"
+        )
+    n = int(length)
+    if n > len(body):
+        raise RequestError(
+            f"brishgarden: {CMD_LENGTH_HEADER} is {n}, but the body has only"
+            f" {len(body)} bytes\n"
+        )
+    cmd, stdin = body[:n], body[n:]
+
+    stdin_mode = headers.get(STDIN_HEADER.lower())
+    if stdin_mode is not None:
+        if stdin_mode.strip().lower() != "null":
+            raise RequestError(
+                f"brishgarden: {STDIN_HEADER} only takes the value null, not"
+                f" {stdin_mode!r}\n"
+            )
+        if stdin:
+            raise RequestError(
+                f"brishgarden: {STDIN_HEADER}: null means /dev/null, but the body"
+                f" has {len(stdin)} bytes of stdin after the command\n"
+            )
+        stdin = None
+    return cmd, stdin
+
+
+def raw_request_parse(body, headers, query, *, binary_mode, encoding="utf-8"):
+    """Decode a raw API (`/zsh/raw/`) request into a `ZshRequest`.
+
+    `body` is the command's bytes followed by its stdin's, split at the
+    `X-Brish-Cmd-Length` header. `headers` and `query` are mappings, such
+    as Starlette's `request.headers` and `request.query_params` (header
+    names are looked up lowercased). In binary mode the command and stdin
+    stay bytes, and `X-Brish-Stdin: null` makes stdin /dev/null. In legacy
+    mode they are decoded strictly as `encoding`, and null stdin is empty.
+
+    Never raises for a malformed request; it sets `error` instead.
+    """
+    body = bytes(body)
+    headers = {k.lower(): v for k, v in headers.items()}
+    opts = {}
+    cmd = stdin = ""
+    cmd_display = stdin_display = ""
+    error = None
+    try:
+        _raw_options(query, opts)
+        cmd, stdin = _raw_payloads(body, headers)
+        cmd_display = text_display(cmd, encoding)
+        if stdin is not None:
+            stdin_display = text_display(stdin, encoding, limit=STDIN_LOG_LIMIT)
+
+        if not binary_mode:
+            cmd = _legacy_text(cmd, "the command", encoding)
+            stdin = "" if stdin is None else _legacy_text(stdin, "stdin", encoding)
+    except RequestError as e:
+        error = str(e)
+        cmd = stdin = ""
+
+    return ZshRequest(
+        cmd=cmd,
+        stdin=stdin,
+        cmd_display=cmd_display,
+        stdin_display=stdin_display,
+        binary_requested=False,
+        binary_reply=bool(binary_mode),
+        error=error,
+        raw=True,
+        **opts,
     )
 
 
@@ -300,3 +419,45 @@ def json_reply(outcome, req, *, brishes=0, all_brishes=0):
         brishes=brishes,
         all_brishes=all_brishes,
     )
+
+
+def _raw_headers(retcode, out_length, binary, notice=False):
+    headers = {
+        RETCODE_HEADER: str(retcode),
+        OUT_LENGTH_HEADER: str(out_length),
+        BINARY_HEADER: "1" if binary else "0",
+    }
+    if notice:
+        headers[NOTICE_HEADER] = "1"
+    return headers
+
+
+def raw_reply_build(res, binary):
+    """The raw API's reply to a request whose result is the CmdResult `res`:
+    stdout's bytes then stderr's, with the retcode and stdout's length in
+    headers. `binary` is whether the garden runs in binary mode, that is,
+    whether the bytes are exact."""
+    outb, errb = bytes(res.outb), bytes(res.errb)
+    return Response(
+        content=outb + errb,
+        media_type="application/octet-stream",
+        headers=_raw_headers(res.retcode, len(outb), binary),
+    )
+
+
+def raw_notice_reply(text, binary):
+    """The raw API's reply for a notice that is not a command's output: the
+    text as the stdout part, retcode 0, and `X-Brish-Notice: 1`."""
+    data = text_safe(text).encode("utf-8")
+    return Response(
+        content=data,
+        media_type="application/octet-stream",
+        headers=_raw_headers(0, len(data), binary, notice=True),
+    )
+
+
+def raw_reply(outcome, binary):
+    """The raw API's reply for the ZshOutcome `outcome`."""
+    if outcome.notice is not None:
+        return raw_notice_reply(outcome.notice, binary)
+    return raw_reply_build(outcome.res, binary)
