@@ -18,6 +18,15 @@ pip install git+https://github.com/NightMachinery/BrishGarden.git
 pip install --no-deps --force-reinstall git+https://github.com/NightMachinery/BrishGarden.git
 #+end_example
 
+** Requirements
+- Python 3.10 or newer. The dependency floors in =pyproject.toml= need it: FastAPI 0.133 is the first release that allows Starlette 1.x, and Starlette 1.3.1, python-multipart 0.0.31 and pydantic-settings 2.14.2 are the first releases without a known advisory.
+- uvicorn older than 0.47. From 0.47 on, uvicorn imports the app before it starts the event loop, and the garden needs a running loop when it is imported.
+- PyNight with its API-key helpers (=pynight.common_apikey=). PyNight 0.2.5, the latest release on PyPI, predates them, and the git version carries the same version number, so until the next release replace it with the git version after installing BrishGarden:
+  #+begin_example zsh
+pip install --no-deps --force-reinstall git+https://github.com/NightMachinery/PyNight.git
+  #+end_example
+- Binary mode (see "Binary data" below) needs a Brish that has it.
+
 * security
 Every endpoint requires the header =X-API-Key=. Binding to =127.0.0.1= keeps
 other hosts out, but not the other users of this machine nor a browser tricked
