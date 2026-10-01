@@ -19,7 +19,10 @@ pip install --no-deps --force-reinstall git+https://github.com/NightMachinery/Br
 #+end_example
 
 ** Requirements
-- Python 3.10 or newer. The dependency floors in =pyproject.toml= need it: FastAPI 0.133 is the first release that allows Starlette 1.x, and Starlette 1.3.1, python-multipart 0.0.31 and pydantic-settings 2.14.2 are the first releases without a known advisory.
+- Python 3.10 to 3.13.
+  - The dependency floors in =pyproject.toml= need 3.10: FastAPI 0.133 is the first release that allows Starlette 1.x, and Starlette 1.3.1, python-multipart 0.0.31 and pydantic-settings 2.14.2 are the first releases without a known advisory.
+  - Python 3.14 is excluded because Brish's command templates (=brish.z=) read =ast.Constant.s=, which 3.14 removed, so every plain-text reply fails there.
+  - Once a fixed Brish is released, the cap can rise to include 3.14, but not further for now. spaCy 3.8.16, which PyNight requires, needs Python below 3.15. With a looser bound, Poetry locks spaCy 3.8.2, numpy 2.0.2 and other old releases for the newer Pythons, and none of them has wheels there, so an install would compile them from source.
 - uvicorn older than 0.47. From 0.47 on, uvicorn imports the app before it starts the event loop, and the garden needs a running loop when it is imported.
 - PyNight with its API-key helpers (=pynight.common_apikey=). PyNight 0.2.5, the latest release on PyPI, predates them, and the git version carries the same version number, so until the next release replace it with the git version after installing BrishGarden:
   #+begin_example zsh

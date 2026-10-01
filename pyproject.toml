@@ -8,7 +8,13 @@ license = "MIT"
 [tool.poetry.dependencies]
 #: FastAPI 0.133 (the first to allow Starlette 1.x) and the patched
 #: Starlette and python-multipart releases below all need Python 3.10.
-python = ">=3.10,<4.0"
+#: The cap: Brish's command templates (`brish.z`) read `ast.Constant.s`,
+#: which Python 3.14 removed, so on 3.14 every plain-text reply fails.
+#: Once a fixed Brish is released, require it and raise the cap to <3.15,
+#: not further: spaCy 3.8.16 (PyNight requires spaCy) needs Python below
+#: 3.15, and an open range makes Poetry lock spaCy 3.8.2, numpy 2.0.2 and
+#: other old releases for the newer Pythons, none of which have wheels there.
+python = ">=3.10,<3.14"
 #: The floors of python-multipart, starlette and pydantic-settings are the
 #: first releases without a known advisory. Starlette is not imported
 #: directly, but it is the HTTP layer under FastAPI, which allows older ones.
