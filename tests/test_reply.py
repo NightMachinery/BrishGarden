@@ -294,11 +294,12 @@ def test_binary_json_reply():
     got = json.loads(reply.body)
     assert base64.b64decode(got["out_b64"]) == ALL_BYTES
     assert base64.b64decode(got["err_b64"]) == b"e\r\n\xff"
-    assert (got["out"], got["err"], got["retcode"]) == (res.out, res.err, 3)
+    assert got["retcode"] == 3
     assert got["cmd"] == "cat \\xff"
     assert (got["session"], got["brishes"], got["allBrishes"]) == ("s", 1, 2)
-    #: The fields of the non-binary reply, plus the two new ones.
-    assert set(got) == set(legacy_json(res, "", "", 0, 0)) | {"out_b64", "err_b64"}
+    #: The fields of the non-binary reply, with the base64 fields in place of
+    #: the text fields, which would only duplicate them.
+    assert set(got) == set(legacy_json(res, "", "", 0, 0)) - {"out", "err"} | {"out_b64", "err_b64"}
 
 
 def test_non_binary_replies_have_no_header():
@@ -314,10 +315,12 @@ def test_text_views_with_surrogates_still_encode():
     #: The text views of brish results never hold surrogates with the default
     #: decoding errors; a result built by hand might.
     res = CmdResult(0, "out \udcff", "err \ud800", "cmd", "")
-    for binary in (False, True):
-        _, _, body = wire(reply_build(res, 1, binary, cmd=res.cmd))
-        got = json.loads(body)
-        assert (got["out"], got["err"]) == ("out \\udcff", "err \\ud800")
+    _, _, body = wire(reply_build(res, 1, cmd=res.cmd))
+    got = json.loads(body)
+    assert (got["out"], got["err"]) == ("out \\udcff", "err \\ud800")
+    got = json.loads(reply_build(res, 1, True, cmd=res.cmd).body)
+    assert base64.b64decode(got["out_b64"]) == b"out \xff"
+    assert base64.b64decode(got["err_b64"]) == b"err \\ud800"
     assert wire(reply_build(res, 0))[2] == "out \\udcfferr \\ud800".encode()
 
 
@@ -329,5 +332,5 @@ def test_positional_error_result_with_bytes():
     assert (res.outb, res.errb) == (b"", tb.encode())
     res.longstr.encode("utf-8")
     assert reply_build(res, 0, True).body == tb.encode()
-    assert json.loads(reply_build(res, 1, True).body)["err"] == tb
+    assert base64.b64decode(json.loads(reply_build(res, 1, True).body)["err_b64"]) == tb.encode()
     assert wire(reply_build(res, 0)) == wire(legacy_plain(res))

@@ -117,6 +117,8 @@ def test_binary_round_trip():
                     got = json.loads(reply.body)
                     assert got["retcode"] == 0, got
                     assert base64.b64decode(got[field]) == data
+                    #: No text fields: they would duplicate the base64 ones.
+                    assert "out" not in got and "err" not in got, sorted(got)
         finally:
             b.cleanup()
         """,
@@ -250,9 +252,12 @@ def test_binary_request_errors_carry_the_header():
             for json_output in (0, 1):
                 reply = handle(b, {"cmd_b64": "not base64!", "binary": 1, "json_output": json_output})
                 assert reply.headers[BINARY_HEADER] == "1"
-                assert b"cmd_b64 is not valid base64" in reply.body
+                err = reply.body
                 if json_output:
-                    assert json.loads(reply.body)["retcode"] == 9000
+                    got = json.loads(reply.body)
+                    assert got["retcode"] == 9000
+                    err = base64.b64decode(got["err_b64"])
+                assert b"cmd_b64 is not valid base64" in err
         finally:
             b.cleanup()
         """

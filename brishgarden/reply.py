@@ -16,7 +16,8 @@ Binary transport is opt-in per request (see the readme):
 - `cmd_b64` and `stdin_b64` carry the command and its stdin as base64 of raw
   bytes, and take precedence over `cmd` and `stdin`;
 - `binary: 1` asks for exact output: the plain reply path answers with the
-  raw bytes, and the JSON reply path adds `out_b64` and `err_b64`.
+  raw bytes, and the JSON reply path carries `out_b64` and `err_b64` in
+  place of the text fields `out` and `err`.
 
 Every reply to a `binary: 1` request carries the header `X-Brish-Binary: 1`,
 but only when the garden's Brish runs in binary mode (the default, see
@@ -370,8 +371,9 @@ def reply_build(
       `binary`, it is `res.outb + res.errb` as `application/octet-stream`;
       otherwise the text `res.outerr` as `text/plain`.
     - Otherwise (the JSON reply path): a dict with the command echo, the pool
-      sizes, `out`, `err` and `retcode`; with `binary`, also `out_b64` and
-      `err_b64`, the base64 of the exact bytes.
+      sizes, `out`, `err` and `retcode`. With `binary`, `out_b64` and
+      `err_b64`, the base64 of the exact bytes, replace `out` and `err`,
+      which would only duplicate them (and, for binary data, be larger).
 
     A binary reply carries the `X-Brish-Binary: 1` header; the caller passes
     `binary` only when the garden's Brish runs in binary mode. A non-binary
@@ -393,14 +395,15 @@ def reply_build(
         "session": text_safe(session) if isinstance(session, str) else session,
         "brishes": brishes,
         "allBrishes": all_brishes,
-        "out": text_safe(res.out),
-        "err": text_safe(res.err),
-        "retcode": res.retcode,
     }
     if not binary:
+        reply["out"] = text_safe(res.out)
+        reply["err"] = text_safe(res.err)
+        reply["retcode"] = res.retcode
         #: FastAPI serializes a returned dict, as it always has.
         return reply
 
+    reply["retcode"] = res.retcode
     reply["out_b64"] = base64.b64encode(res.outb).decode("ascii")
     reply["err_b64"] = base64.b64encode(res.errb).decode("ascii")
     return JSONResponse(content=reply, headers=_binary_headers(True))
