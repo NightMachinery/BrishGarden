@@ -189,6 +189,8 @@ A garden older than the streaming API answers =404= (FastAPI's ={"detail":"Not F
 
 * environment variables
 ** =BRISHGARDEN_N= sets the number of Brishes started by default
+** =GARDEN_PORT= sets the port, 7230 by default
+The garden listens on =127.0.0.1= at =GARDEN_PORT=, the variable its shell clients read too. If something still listens there when it starts (another garden, or an old one that is still stopping), it waits up to 15 seconds for the port, then exits with status 1 before starting any worker or running its startup commands.
 ** =BRISH_BINARY=0= runs the garden's Brishes in legacy mode
 The garden runs every Brish it creates (the shared pool, the session Brishes, and the pool that =%GARDEN_ALL= rebuilds) in one mode, binary by default. It reads =BRISH_BINARY= once, when the process starts:
 - unset or empty: binary mode;
