@@ -469,8 +469,8 @@ import asyncio, threading, time
 from brishgarden.reply import ZshOutcome, raw_request_parse
 from brishgarden.sessions import session_take
 from brishgarden.stream import (
-    FRAME_EXIT, FRAME_STDERR, FRAME_STDOUT, FrameDecoder, StreamResponse,
-    outcome_reply, stream_headers, stream_own, stream_report, stream_run,
+    FRAME_EXIT, FRAME_STDERR, FRAME_STDOUT, BrishCancelledException, FrameDecoder,
+    StreamResponse, outcome_reply, stream_headers, stream_own, stream_report, stream_run,
 )
 
 class Reply:
@@ -514,16 +514,21 @@ def serve(b, cmd, stdin=b"", query=None, disconnect_after=None, send_delay=0, bl
                     time.sleep(0.01)
             elif channel.gone:
                 return None
-            if session is None:
-                return stream_run(b, 0, req, channel)
-            taken = session_take(*session, lambda: channel.gone)
-            if taken is None:
-                return None
-            sb, index, lock = taken
+            gone = lambda: channel.gone
             try:
-                return stream_run(sb, index, req, channel)
-            finally:
-                lock.release()
+                if session is None:
+                    return stream_run(b, 0, req, channel, cancelled=gone)
+                taken = session_take(*session, gone)
+                if taken is None:
+                    return None
+                sb, index, lock = taken
+                try:
+                    return stream_run(sb, index, req, channel, cancelled=gone)
+                finally:
+                    lock.release()
+            except BrishCancelledException:
+                #: As the garden's zsh_run: Brish called the wait off.
+                return None
 
         def run():
             reply.res = stream_own(channel, go)
@@ -757,6 +762,51 @@ def test_stream_session_wait_gives_up():
                 b.cleanup()
         """
     )
+
+
+def test_stream_gives_up_while_a_dead_session_worker_is_replaced():
+    #: After a session's worker died (here by `exit`), Brish replaces it
+    #: inside the next request's popen. A stream whose client leaves during
+    #: that wait runs nothing (popen's `cancelled=`, Brish 0.4.1 and later),
+    #: and the replacement stays for the next request.
+    res = run_handle(
+        r"""
+        if not hasattr(brish, "BrishCancelledException"):
+            print("SKIP: this Brish has no cancelled=")
+            raise SystemExit(0)
+        sentinel = os.path.join(os.getcwd(), "sentinel")
+        made = []
+
+        def make():
+            #: A slow boot command, and no eager replacement, so that the
+            #: replacement boots inside the next request, for about 1 s.
+            made.append(garden_brish(server_count=1, boot_cmd="sleep 1"))
+            made[-1].eager_replacement = False
+            return made[-1]
+
+        sessions = {}
+        nothing_ran = ["Stream: the client went away before the command started; nothing ran."]
+        try:
+            sess = (sessions, "s", make)
+            r = serve(None, b"exit 3", session=sess)
+            assert r.retcode == 3, r
+            r = serve(None, b"print -r -- ran >> sentinel; sleep 2", disconnect_after=0.3, session=sess)
+            assert r.res is None and r.frames == [] and r.report == nothing_ran, r
+            time.sleep(2.5)
+            assert not os.path.exists(sentinel)
+            #: The replacement is there: the next request takes it at once.
+            t0 = time.monotonic()
+            r = serve(None, b"print -rn -- ok", session=sess)
+            assert (r.retcode, r.payload(FRAME_STDOUT)) == (0, b"ok"), r
+            assert time.monotonic() - t0 < 0.9, time.monotonic() - t0
+            assert len(made) == 1
+        finally:
+            for b in made:
+                b.cleanup()
+        """
+    )
+    if "SKIP:" in res.out:
+        pytest.skip("this Brish has no cancelled= (Brish before 0.4.1)")
 
 
 def test_stream_stalled_client_then_gone():

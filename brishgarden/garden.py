@@ -27,6 +27,7 @@ from brishgarden.reply import (
 )
 from brishgarden.sessions import session_take
 from brishgarden.stream import (
+    BrishCancelledException,
     DaemonPool,
     StreamResponse,
     outcome_reply as stream_outcome_reply,
@@ -302,6 +303,10 @@ def zsh_run(req, ctx, run, cancelled=None):
             res = run(myBrish, server_index)
         except UninitializedBrishException:
             retry = True
+        except BrishCancelledException:
+            #: `cancelled()` became True while Brish waited for the worker
+            #: (a dead worker's replacement still starting, say): nothing ran.
+            res = None
         except:
             res = CmdResult(RETCODE_GARDEN_ERROR, "", traceback.format_exc(), req.cmd, req.stdin)
             ctx.log_level = max(ctx.log_level, 101)
@@ -438,7 +443,9 @@ def stream_owner(req, ctx, channel):
         lambda: zsh_run(
             req,
             ctx,
-            lambda brish, server_index: stream_run(brish, server_index, req, channel),
+            lambda brish, server_index: stream_run(
+                brish, server_index, req, channel, cancelled=lambda: channel.gone
+            ),
             cancelled=lambda: channel.gone,
         ),
     )

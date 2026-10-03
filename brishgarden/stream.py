@@ -43,6 +43,18 @@ import time
 import traceback
 
 from brish import CmdResult, UninitializedBrishException
+
+try:
+    from brish import BrishCancelledException
+
+    #: Brish 0.4.1 and later: popen takes `cancelled=`, and a read after
+    #: kill() waits for the kill's first signal by itself.
+    POPEN_CANCELS = True
+except ImportError:
+    POPEN_CANCELS = False
+
+    class BrishCancelledException(Exception):
+        """Never raised: this Brish's popen takes no `cancelled=`."""
 from starlette.responses import StreamingResponse
 
 from brishgarden.reply import (
@@ -334,16 +346,19 @@ def _signal_wait(p, poll=0.01):
     meanwhile would let a command that the client's backpressure held up
     write on at full speed: `head -c 20000000 /dev/zero` blocked on a full
     pipe then ran to its end, and a command after it in the same line ran
-    too, before the signal came. Brish has no public way to tell that the
-    signal is out; BrishPopen sets its `_ahead` then. Without that
-    attribute (another Brish), this does not wait.
+    too, before the signal came. Brish 0.4.1 and later wait for that signal
+    themselves before such a read (`BrishPopen.wait_signalled`), so this
+    returns at once there; with an older Brish it polls the private
+    `_ahead`, which BrishPopen sets once the signal is out.
     """
+    if hasattr(p, "wait_signalled"):
+        return
     deadline = time.monotonic() + p.kill_grace
     while not getattr(p, "_ahead", True) and p.retcode is None and time.monotonic() < deadline:
         time.sleep(poll)
 
 
-def stream_run(brish, server_index, req, channel, *, log_tail=LOG_TAIL_BYTES):
+def stream_run(brish, server_index, req, channel, *, log_tail=LOG_TAIL_BYTES, cancelled=None):
     """Run the ZshRequest `req` on worker `server_index` of `brish` with
     `popen`, in this thread, which owns the BrishPopen, and put its output
     on `channel` as frames, chunk by chunk, as Brish yields it. Returns a
@@ -361,13 +376,22 @@ def stream_run(brish, server_index, req, channel, *, log_tail=LOG_TAIL_BYTES):
     signal is out (`_signal_wait`), leaving the `with` block reads the rest
     of its output, discarded, which frees the worker.
 
+    `cancelled` (with Brish 0.4.1 and later) goes to `popen`, which checks
+    it while it waits for the worker, also while Brish replaces a worker
+    that died, and once more just before it sends the command; when it is
+    True, nothing runs, and popen raises BrishCancelledException.
+
     Exceptions from `popen` itself come before anything ran (the garden
-    retries an UninitializedBrishException). An exception after that is the
+    retries an UninitializedBrishException, and takes a
+    BrishCancelledException as a request that ran nothing). An exception after that is the
     garden's: it is raised after the command was killed and drained, and
     never as an UninitializedBrishException, so it is never retried.
     """
     cmd = brish_cmd(brish, req.cmd, req.merge)
-    p = brish.popen(cmd, cmd_stdin=req.stdin, fork=False, server_index=server_index)
+    kwargs = {}
+    if cancelled is not None and POPEN_CANCELS:
+        kwargs["cancelled"] = cancelled
+    p = brish.popen(cmd, cmd_stdin=req.stdin, fork=False, server_index=server_index, **kwargs)
     channel.started = True
     tails = {FRAME_STDOUT: _Tail(log_tail), FRAME_STDERR: _Tail(log_tail)}
     try:

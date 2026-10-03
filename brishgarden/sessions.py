@@ -7,10 +7,13 @@ Brish instance, so the Brishes that `%GARDEN_ALL` makes get fresh ones. A
 request that finds its session busy waits for this lock, in the garden,
 where a streamed request can give up when its client goes away (see
 `session_take`), and not inside Brish, which waits for its worker's lock
-until it gets it, with no way to call the wait off. While a request holds
-the session lock, the worker's own lock is free, so Brish takes it at once,
-and a restart that is due (after the worker died, or after an `exit`) runs
-as usual, since it waits for every worker lock and none is held.
+until it gets it. While a request holds the session lock, the worker's own
+lock is free, so Brish takes it at once. A worker that died (after an
+`exit`, or a kill that reached its SIGKILL) is replaced inside that call
+(Brish 0.4.1 and later; an older Brish restarts the session's instance
+there, which waits for no other lock, since none is held). A streamed
+request also passes `cancelled=` to popen (see `stream_run`), so it can
+give up during that wait too.
 
 Nothing here imports the garden, so it can be tested without starting its
 workers.
