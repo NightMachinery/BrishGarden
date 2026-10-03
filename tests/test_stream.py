@@ -469,7 +469,7 @@ import asyncio, threading, time
 from brishgarden.reply import ZshOutcome, raw_request_parse
 from brishgarden.sessions import session_take
 from brishgarden.stream import (
-    FRAME_EXIT, FRAME_STDERR, FRAME_STDOUT, BrishCancelledException, FrameDecoder,
+    FRAME_EXIT, FRAME_STDERR, FRAME_STDOUT, POPEN_CANCELS, BrishCancelledException, FrameDecoder,
     StreamResponse, outcome_reply, stream_headers, stream_own, stream_report, stream_run,
 )
 
@@ -487,10 +487,12 @@ class Reply:
         return int(exits[0]) if exits else None
 
 def serve(b, cmd, stdin=b"", query=None, disconnect_after=None, send_delay=0, block_send=False,
-          late_popen=False, session=None, **headers):
+          late_popen=False, cancels=True, session=None, **headers):
     #: late_popen: the owner waits until the client is gone before it calls
     #: stream_run, as when the client leaves between the garden's last check
     #: and popen.
+    #: cancels: False gives popen no `cancelled=`, as when the client leaves
+    #: after Brish's own last check, just before popen returns.
     #: session: (sessions, name, make) runs the command on that session, as
     #: the garden's zsh_run does (session_take, which waits for the session
     #: and gives up when the client is gone), instead of on worker 0 of `b`.
@@ -514,7 +516,7 @@ def serve(b, cmd, stdin=b"", query=None, disconnect_after=None, send_delay=0, bl
                     time.sleep(0.01)
             elif channel.gone:
                 return None
-            gone = lambda: channel.gone
+            gone = (lambda: channel.gone) if cancels else None
             try:
                 if session is None:
                     return stream_run(b, 0, req, channel, cancelled=gone)
@@ -698,10 +700,24 @@ def test_stream_disconnect_kills_the_command():
             assert r.res is None or r.res.retcode == 130, r.res
             assert b.send_cmd("print -rn -- ok", server_index=0).out == "ok"
 
-            #: A client gone just before popen: popen_set refuses the popen,
-            #: the owner kills it, and the garden reports a disconnect (one
-            #: info line), not a failure (no failure log, no sound).
+            #: A client gone just before popen: Brish's own last check
+            #: (popen's `cancelled=`, Brish 0.4.1 and later) refuses the
+            #: request, so nothing runs. Older Brish runs it, and then the
+            #: kill below happens.
             r = serve(b, b"sleep 0.5; print -r -- ran >> sentinel", disconnect_after=0.2, late_popen=True)
+            time.sleep(1)
+            assert not os.path.exists(sentinel) and r.retcode is None, r
+            if POPEN_CANCELS:
+                assert r.res is None, r.res
+                assert r.report == ["Stream: the client went away before the command started; nothing ran."], r.report
+            else:
+                assert r.res.retcode == 130 and r.channel.killed, r.res
+            assert b.send_cmd("print -rn -- $kept", server_index=0).out == "yes"
+
+            #: A client gone after Brish's last check: popen_set refuses the
+            #: popen, the owner kills it, and the garden reports a disconnect
+            #: (one info line), not a failure (no failure log, no sound).
+            r = serve(b, b"sleep 0.5; print -r -- ran >> sentinel", disconnect_after=0.2, late_popen=True, cancels=False)
             time.sleep(1)
             assert not os.path.exists(sentinel) and r.retcode is None, r
             assert r.res.retcode == 130 and r.channel.killed, r.res
