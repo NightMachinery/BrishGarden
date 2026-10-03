@@ -27,6 +27,10 @@ but only when the garden's Brish runs in binary mode (the default, see
 `brishgarden/mode.py`). A garden in legacy mode (`BRISH_BINARY=0`, or a brish
 too old for binary mode) refuses such a request without running it, so a
 client that does not see the header knows that nothing ran.
+
+The raw and streaming APIs always reply with exact bytes in binary mode. Their
+query option `binary=1` asks for that: a legacy-mode garden refuses the
+request without running it, as it refuses `binary: 1` on the JSON API.
 """
 
 import base64
@@ -246,7 +250,7 @@ def request_parse(body, *, binary_mode, encoding="utf-8"):
 
 
 #: The raw API's query parameters.
-RAW_OPTIONS = ("session", "failure_expected", "nolog", "merge", "log_level")
+RAW_OPTIONS = ("session", "failure_expected", "nolog", "merge", "log_level", "binary")
 
 
 def _single_values(mapping, names, what, *, lower=False):
@@ -291,6 +295,7 @@ def _raw_options(query, opts):
     opts["failure_expected"] = bool_from_str(query.get("failure_expected", ""))
     opts["nolog"] = bool_from_str(query.get("nolog", ""))
     opts["merge"] = bool_from_str(query.get("merge", ""))
+    opts["binary_requested"] = bool_from_str(query.get("binary", ""))
     if error is not None:
         raise error
     log_level = query.get("log_level")
@@ -358,7 +363,9 @@ def raw_request_parse(body, headers, query, *, binary_mode, encoding="utf-8", st
     names are case-insensitive; a header or option repeated with different
     values is refused). In binary mode the command and stdin
     stay bytes, and `X-Brish-Stdin: null` makes stdin /dev/null. In legacy
-    mode they are decoded strictly as `encoding`, and null stdin is empty.
+    mode they are decoded strictly as `encoding`, and null stdin is empty;
+    a request with the option `binary=1`, which asks for exact bytes, is
+    refused there.
 
     The streaming API (`/zsh/stream/`) takes the same request, decoded here
     with `stream=True`, which only marks it as streamed.
@@ -366,7 +373,7 @@ def raw_request_parse(body, headers, query, *, binary_mode, encoding="utf-8", st
     Never raises for a malformed request; it sets `error` instead.
     """
     body = bytes(body)
-    opts = {}
+    opts = {"binary_requested": False}
     cmd = stdin = ""
     cmd_display = stdin_display = ""
     error = None
@@ -378,6 +385,8 @@ def raw_request_parse(body, headers, query, *, binary_mode, encoding="utf-8", st
             stdin_display = text_display(stdin, encoding, limit=STDIN_LOG_LIMIT)
 
         if not binary_mode:
+            if opts["binary_requested"]:
+                raise RequestError(LEGACY_REFUSAL)
             cmd = _legacy_text(cmd, "the command", encoding)
             stdin = "" if stdin is None else _legacy_text(stdin, "stdin", encoding)
             #: Brish would refuse a NUL too, but with a 9000 that looks like
@@ -398,7 +407,6 @@ def raw_request_parse(body, headers, query, *, binary_mode, encoding="utf-8", st
         stdin=stdin,
         cmd_display=cmd_display,
         stdin_display=stdin_display,
-        binary_requested=False,
         binary_reply=bool(binary_mode),
         error=error,
         raw=True,

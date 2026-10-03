@@ -10,6 +10,7 @@ from brish import CmdResult
 from brishgarden.reply import (
     BINARY_HEADER,
     CMD_LENGTH_HEADER,
+    LEGACY_REFUSAL,
     NOTICE_HEADER,
     OUT_LENGTH_HEADER,
     REFUSED_HEADER,
@@ -106,6 +107,29 @@ def test_parse_malformed(binary_mode, body, headers, query, needle):
     assert (req.cmd, req.stdin) == ("", "")
 
 
+@pytest.mark.parametrize("value, want", [("1", True), ("y", True), ("", False), ("0", False), ("n", False), (None, False)])
+def test_parse_binary_option(value, want):
+    query = {} if value is None else {"binary": value}
+    req = parse(b"print -r -- hi", b"in", query=query, binary_mode=True)
+    assert req.error is None and req.binary_requested is want and req.binary_reply
+    assert (req.cmd, req.stdin) == (b"print -r -- hi", b"in")
+    req = parse(b"print -r -- hi", b"in", query=query, binary_mode=False)
+    assert req.binary_requested is want and not req.binary_reply
+    if want:
+        #: Legacy mode cannot give exact bytes, so it refuses the request, as
+        #: it refuses `binary: 1` on the JSON API. The log still shows it.
+        assert req.error == LEGACY_REFUSAL, req.error
+        assert (req.cmd, req.stdin) == ("", "")
+        assert (req.cmd_display, req.stdin_display) == ("print -r -- hi", "in")
+    else:
+        assert req.error is None and (req.cmd, req.stdin) == ("print -r -- hi", "in")
+
+
+def test_parse_binary_refusal_keeps_failure_expected():
+    req = parse(b"x", query={"binary": "1", "failure_expected": "1"}, binary_mode=False)
+    assert req.error == LEGACY_REFUSAL and req.failure_expected
+
+
 def test_parse_malformed_keeps_failure_expected():
     req = parse(b"x", query={"log_level": "?", "failure_expected": "1"})
     assert req.error is not None and req.failure_expected
@@ -145,7 +169,7 @@ def test_parse_accepts_repeats_of_one_value():
     assert raw_request_parse(b"cat", raw_headers(*pairs), {}, binary_mode=True).error is None
 
 
-@pytest.mark.parametrize("name", ["session", "merge", "nolog", "log_level", "failure_expected"])
+@pytest.mark.parametrize("name", ["session", "merge", "nolog", "log_level", "failure_expected", "binary"])
 def test_parse_refuses_conflicting_repeated_options(name):
     query = QueryParams(f"{name}=1&{name}=0&failure_expected=1" if name != "failure_expected" else "failure_expected=1&failure_expected=0")
     req = raw_request_parse(b"cat", {CMD_LENGTH_HEADER: "3"}, query, binary_mode=True)
@@ -354,10 +378,32 @@ def test_round_trip_legacy_mode():
             rc, out, err, h = handle(b, b"print -rn -- ran >> sentinel # \xff")
             assert rc == 9000 and b"not valid utf-8" in err, err
             assert h["x-brish-refused"] == "1"
+            #: binary=1 asks for exact bytes, which legacy mode cannot give.
+            rc, out, err, h = handle(b, b"print -rn -- ran >> sentinel", query={"binary": "1"})
+            assert (rc, h["x-brish-binary"], h["x-brish-refused"]) == (9000, "0", "1"), (rc, err)
+            assert b"runs in legacy (text) mode" in err and b"Nothing was run" in err, err
             assert not os.path.exists(sentinel)
+            rc, out, err, h = handle(b, b"print -rn -- ok", query={"binary": "0"})
+            assert (rc, out, h["x-brish-binary"]) == (0, b"ok", "0"), (rc, err)
 
             rc, out, err, h = handle(b, b"cat", x_brish_stdin="null")
             assert (rc, out, err) == (0, b"", b"")
+        finally:
+            b.cleanup()
+        """
+    )
+
+
+@binary_only
+def test_round_trip_binary_option():
+    #: In binary mode, binary=1 changes nothing: the reply is exact anyway.
+    run_handle(
+        r"""
+        b = garden_brish(server_count=1)
+        try:
+            rc, out, err, h = handle(b, b"cat", bytes(range(256)), query={"binary": "1"})
+            assert (rc, out, err, h["x-brish-binary"]) == (0, bytes(range(256)), b"", "1"), (rc, err)
+            assert "x-brish-refused" not in h
         finally:
             b.cleanup()
         """

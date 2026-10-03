@@ -912,11 +912,33 @@ def test_stream_legacy_mode():
                 r = serve(b, cmd, stdin)
                 assert (r.retcode, r.headers["x-brish-binary"], r.headers["x-brish-refused"]) == (9000, "0", "1"), r
                 assert needle in r.payload(FRAME_STDERR), r
+            #: binary=1 asks for exact bytes, which legacy mode cannot give.
+            r = serve(b, b"print -rn -- ran >> sentinel", query={"binary": "1"})
+            assert (r.retcode, r.headers["x-brish-binary"], r.headers["x-brish-refused"]) == (9000, "0", "1"), r
+            assert b"runs in legacy (text) mode" in r.payload(FRAME_STDERR) and r.frames[0][1] == FRAME_STDERR, r
             assert not os.path.exists(sentinel)
+            r = serve(b, b"print -rn -- ok", query={"binary": "0"})
+            assert (r.retcode, r.payload(FRAME_STDOUT)) == (0, b"ok"), r
             r = serve(b, b"cat", x_brish_stdin="null")
             assert (r.retcode, r.payload(FRAME_STDOUT)) == (0, b""), r
             r = serve(b, b"print -r -- caf\xc3\xa9")
             assert r.payload(FRAME_STDOUT) == "café\n".encode(), r
+        finally:
+            b.cleanup()
+        """
+    )
+
+
+@binary_only
+def test_stream_binary_option():
+    #: In binary mode, binary=1 changes nothing: the frames carry exact bytes.
+    run_handle(
+        r"""
+        b = garden_brish(server_count=1)
+        try:
+            r = serve(b, b"cat", bytes(range(256)), query={"binary": "1"})
+            assert (r.retcode, r.payload(FRAME_STDOUT), r.headers["x-brish-binary"]) == (0, bytes(range(256)), "1"), r
+            assert "x-brish-refused" not in r.headers
         finally:
             b.cleanup()
         """
