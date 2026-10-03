@@ -35,7 +35,7 @@ description = "Asynchronous file operations."
 optional = false
 python-versions = ">=3.11"
 groups = ["main"]
-markers = "python_version == \"3.13\""
+markers = "python_version >= \"3.13\""
 files = [
     {file = "aiofile-3.12.3-py3-none-any.whl", hash = "sha256:5c1bcc9e929c50834608e8cc1a4cc1d7503eb60c15a535b779fd39e2f372c017"},
     {file = "aiofile-3.12.3.tar.gz", hash = "sha256:caa6aa746b5e47e2165f7abd741b6415e49cf4d44fddc0f61844612cc3924d41"},
@@ -155,14 +155,14 @@ numpy = {version = ">=1.19.0,<3.0.0", markers = "python_version >= \"3.9\""}
 
 [[package]]
 name = "brish"
-version = "0.3.6"
+version = "0.4.1"
 description = "A bridge between zsh and Python."
 optional = false
-python-versions = "<4.dev0,>=3.7.0"
+python-versions = "<4,>=3.10"
 groups = ["main"]
 files = [
-    {file = "brish-0.3.6-py3-none-any.whl", hash = "sha256:c62fd3d78ed319cb78bb55d750b151d58ab91ea350bec8e64bb778cb9f968c1f"},
-    {file = "brish-0.3.6.tar.gz", hash = "sha256:03a490571b84cebb770e7e3cdd8ca6a6bfefcba6ab0264643c2a07ab3f8bb030"},
+    {file = "brish-0.4.1-py3-none-any.whl", hash = "sha256:f86b75c4cba4112cdc65d80a5de880c2afa704f7e3fd6176c46011020acf6a59"},
+    {file = "brish-0.4.1.tar.gz", hash = "sha256:ec54adef8f5c8b66254e1178959de8cf4563f01b95ab6fdcff58ae210c35aec2"},
 ]
 
 [package.dependencies]
@@ -211,7 +211,7 @@ description = "Asynchronous file IO for Linux MacOS or Windows."
 optional = false
 python-versions = ">=3.10"
 groups = ["main"]
-markers = "python_version == \"3.13\""
+markers = "python_version >= \"3.13\""
 files = [
     {file = "caio-0.12.9-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:98e88c20217456113ae3021882aa310fab8ae77e54ec62a7c990f1c34a9f62a6"},
     {file = "caio-0.12.9-cp310-cp310-manylinux_2_34_aarch64.whl", hash = "sha256:0b9922e7d5800b9aadafbe8ba956ed095ac37f85e0b38b96c97586e443548ff5"},
@@ -612,7 +612,7 @@ description = "Python library for calculating contours of 2D quadrilateral grids
 optional = false
 python-versions = ">=3.12"
 groups = ["main"]
-markers = "python_version == \"3.13\""
+markers = "python_version >= \"3.13\""
 files = [
     {file = "contourpy-1.4.0-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:186ba929df36d61b6127da2e89cd1357e4cb79aca647381ab1a6feb0b152877b"},
     {file = "contourpy-1.4.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:c76f3a5318164db7d9401132fc1b5364b784c613c93fa506e3b5e6d1bf353ec8"},
@@ -964,6 +964,7 @@ httpx = ">=0.27.0"
 pydantic = [
     {version = ">=2.7.4", extras = ["email"], markers = "python_version < \"3.13\""},
     {version = ">=2.8.0", extras = ["email"], markers = "python_version == \"3.13\""},
+    {version = ">=2.12.0", extras = ["email"], markers = "python_version >= \"3.14\""},
 ]
 rich-toolkit = ">=0.20.5"
 rignore = ">=0.5.1"
@@ -1252,7 +1253,7 @@ description = "Tools to manipulate font files"
 optional = false
 python-versions = ">=3.11"
 groups = ["main"]
-markers = "python_version == \"3.13\""
+markers = "python_version >= \"3.13\""
 files = [
     {file = "fonttools-4.66.1-cp311-cp311-macosx_10_9_universal2.whl", hash = "sha256:d4f76868aea9cc4ce47fdbeaa904c02ee7d85dd0ad095071ae77f0bda6e62cf5"},
     {file = "fonttools-4.66.1-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:34378db9a398b59de18cc79d942f0a907c6fc6301945e065ec888202f607aa3f"},
@@ -2017,7 +2018,7 @@ description = "Python plotting package"
 optional = false
 python-versions = ">=3.11"
 groups = ["main"]
-markers = "python_version == \"3.13\""
+markers = "python_version >= \"3.13\""
 files = [
     {file = "matplotlib-3.11.2-cp311-cp311-macosx_10_12_x86_64.whl", hash = "sha256:5e1e923a3fc3326b99ec0a6ff1ab1338ac6c6cc62ad9d8a9c944197c7f8c6221"},
     {file = "matplotlib-3.11.2-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:c27e577ece613ea12a0790e00b4eb80d901c59a3e16cad474f31d8b1529690b9"},
@@ -2245,7 +2246,7 @@ description = "Fundamental package for array computing in Python"
 optional = false
 python-versions = ">=3.12"
 groups = ["main"]
-markers = "python_version == \"3.13\""
+markers = "python_version >= \"3.13\""
 files = [
     {file = "numpy-2.5.3-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:cb189f09db39283b26bfd061ec16189e14f71c6755207f72a0f7540867afe5b9"},
     {file = "numpy-2.5.3-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:f59a878c33d6b88122d80d239bb3b845d58708750b0cb06a09aebb9b18ec696c"},
@@ -2917,23 +2918,23 @@ windows-terminal = ["colorama (>=0.4.6)"]
 
 [[package]]
 name = "pynight"
-version = "0.2.5"
+version = "0.2.6"
 description = "My Python utility library."
 optional = false
 python-versions = "<4.0,>=3.8"
 groups = ["main"]
 files = [
-    {file = "pynight-0.2.5-py3-none-any.whl", hash = "sha256:192b491f8aa721b296184ac2f1e80c8577a6ef4f9ece4a9826241fcfaa34e0db"},
-    {file = "pynight-0.2.5.tar.gz", hash = "sha256:740ffcc0b3a8815714834a6517eb46022a7385e856b82dc44698b5f0b710ff53"},
+    {file = "pynight-0.2.6-py3-none-any.whl", hash = "sha256:ba6383ae44003cecc6cdd4c952a0cd4b49e9393d8079d8e9e0a5998b33619780"},
+    {file = "pynight-0.2.6.tar.gz", hash = "sha256:8c5ceb7728866ca316fdd8535c3a77a3513e333018efea439d59114a5145f0f8"},
 ]
 
 [package.dependencies]
 aiofile = "*"
-brish = ">=0.3.3,<0.4.0"
+brish = ">=0.3.3,<0.5"
 dnspython = ">=2.1.0,<3.0.0"
 executing = ">=1.2.0,<2.0.0"
 matplotlib = ">=3.7.1,<4.0.0"
-openai = ">=1.14.2,<2.0.0"
+openai = ">=1.14.2,<3"
 pyperclip = ">=1.8.2,<2.0.0"
 python-magic = "*"
 spacy = ">=3.5.1,<4.0.0"
@@ -4458,7 +4459,7 @@ description = "An implementation of the WebSocket Protocol (RFC 6455 & 7692)"
 optional = false
 python-versions = ">=3.11"
 groups = ["main"]
-markers = "python_version == \"3.13\""
+markers = "python_version >= \"3.13\""
 files = [
     {file = "websockets-17.1-cp311-cp311-macosx_10_9_universal2.whl", hash = "sha256:88b882764ef65147a7a5ae13168dedbe225a04e2ff4858fe543f2c402f093e9c"},
     {file = "websockets-17.1-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:98a5b2589a56a4b4f098b0a958099a4356ab904a7844f1da3841efca469af7e9"},
@@ -4726,5 +4727,5 @@ dev = ["pytest", "setuptools"]
 
 [metadata]
 lock-version = "2.1"
-python-versions = ">=3.10,<3.14"
-content-hash = "21f06f3d82453879ebb3c029e07636a8d2de6e53ac919b2445c9bfda502c4f1f"
+python-versions = ">=3.10,<3.15"
+content-hash = "51e2cac6fba08bebec76798d99c5147c0640d74829a7588b783879ddeeba484d"

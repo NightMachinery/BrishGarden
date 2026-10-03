@@ -19,22 +19,15 @@ pip install --no-deps --force-reinstall git+https://github.com/NightMachinery/Br
 #+end_example
 
 ** Requirements
-- Python 3.10 to 3.13.
+- Python 3.10 to 3.14.
   - The dependency floors in =pyproject.toml= need 3.10: FastAPI 0.133 is the first release that allows Starlette 1.x, and Starlette 1.3.1, python-multipart 0.0.31 and pydantic-settings 2.14.2 are the first releases without a known advisory.
-  - Python 3.14 is excluded because Brish's command templates (=brish.z=) read =ast.Constant.s=, which 3.14 removed, so every plain-text reply fails there.
-  - Once a fixed Brish is released, the cap can rise to include 3.14, but not further for now. spaCy 3.8.16, which PyNight requires, needs Python below 3.15. With a looser bound, Poetry locks spaCy 3.8.2, numpy 2.0.2 and other old releases for the newer Pythons, and none of them has wheels there, so an install would compile them from source.
+  - The cap: spaCy 3.8.16, which PyNight requires, needs Python below 3.15. With a looser bound, Poetry locks spaCy 3.8.2, numpy 2.0.2 and other old releases for the newer Pythons, and none of them has wheels there, so an install would compile them from source.
 - uvicorn older than 0.47. From 0.47 on, uvicorn imports the app before it starts the event loop, and the garden needs a running loop when it is imported.
-- PyNight with its API-key helpers (=pynight.common_apikey=), without which the garden cannot start. PyNight 0.2.5, the latest release on PyPI and the version =poetry.lock= pins, predates them, and the git version carries the same version number, so until the next release replace it with the git version after installing BrishGarden (with pip or with =poetry install=):
-  #+begin_example zsh
-pip install --no-deps --force-reinstall git+https://github.com/NightMachinery/PyNight.git
-  #+end_example
-- For binary mode (see "Binary data" below) and for the test suite, a Brish that has binary mode. Brish 0.3.6, the latest release and the version the lock pins, runs the garden in legacy mode but predates binary mode, and the git version again carries the same version number, so replace it the same way:
-  #+begin_example zsh
-pip install --no-deps --force-reinstall git+https://github.com/NightMachinery/brish.git
-  #+end_example
+- Brish 0.4.1 or later: binary mode (see "Binary data" below), =popen= with =cancelled== (the streaming API), the replacement of one dead worker without restarting the others, and command templates that work on Python 3.14 (older ones read =ast.Constant.s=, which 3.14 removed, so every plain-text reply failed there).
+- PyNight 0.2.6 or later, for its API-key helpers (=pynight.common_apikey=), without which the garden cannot start.
 
 * Tests
-The suite in =tests/= needs a Brish that has binary mode (see "Requirements"): with Brish 0.3.6 from PyPI, some of its tests fail even in legacy mode, because they use binary mode's API (the =binary= argument of =Brish()=, binary results). It runs in two modes, legacy and binary, chosen by =BRISH_BINARY=, so run it once in each; =tests/conftest.py= gives the commands. To test an unreleased Brish checkout, put it first on =PYTHONPATH= and name it in =BRISHGARDEN_TEST_BRISH_ROOT=; the guard tests then check that it is the Brish being imported.
+The suite in =tests/= runs against the installed Brish (see "Requirements"). It runs in two modes, legacy and binary, chosen by =BRISH_BINARY=, so run it once in each; =tests/conftest.py= gives the commands. To test an unreleased Brish checkout, put it first on =PYTHONPATH= and name it in =BRISHGARDEN_TEST_BRISH_ROOT=; the guard tests then check that it is the Brish being imported.
 
 * security
 Every endpoint requires the header =X-API-Key=. Binding to =127.0.0.1= keeps
