@@ -397,22 +397,32 @@ def raw_request_parse(body, headers, query, *, binary_mode, encoding="utf-8"):
     )
 
 
-def brish_run(brish, cmd, stdin, *, merge, server_index):
-    """Run a request's command on worker `server_index` of `brish`.
+#: The command that runs a request's command with stderr merged into stdout.
+MERGE_TEMPLATE = "{{ eval {cmd} }} 2>&1"
 
-    With `merge` (the plain reply path, which has a single body), stderr is
-    merged into stdout in the shell. In binary mode a bytes `cmd` is quoted
-    byte-exactly into the `eval` wrapper.
+
+def brish_cmd(brish, cmd, merge):
+    """The command text that `brish` runs for a request's command `cmd`.
+
+    With `merge` (the plain reply path, which has a single body, and the
+    `merge` option of the raw API), `cmd` runs inside an
+    `eval` whose stderr is merged into stdout in the shell. In binary mode a
+    bytes `cmd` is quoted byte-exactly into that wrapper.
     """
     if merge:
-        return brish.z(
-            "{{ eval {cmd} }} 2>&1",
-            locals_={"cmd": cmd},
-            fork=False,
-            cmd_stdin=stdin,
-            server_index=server_index,
-        )
-    return brish.send_cmd(cmd, fork=False, cmd_stdin=stdin, server_index=server_index)
+        return brish.zstring(MERGE_TEMPLATE, locals_={"cmd": cmd})
+    return cmd
+
+
+def brish_run(brish, cmd, stdin, *, merge, server_index):
+    """Run a request's command on worker `server_index` of `brish`, and
+    return its CmdResult. `merge`: see `brish_cmd`."""
+    return brish.send_cmd(
+        brish_cmd(brish, cmd, merge),
+        fork=False,
+        cmd_stdin=stdin,
+        server_index=server_index,
+    )
 
 
 def _binary_headers(binary):

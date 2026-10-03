@@ -153,12 +153,25 @@ async def get_ip(request: Request):
 ###
 pattern_magic = re.compile(r"(?im)^%GARDEN_(\S+)\s+((?:.|\n)*)$") # @duplicateCode/86da52eced14bf6baa394f50a9601812
 
-def zsh_handle(request: Request, decode):
-    """Log and run one request, the shared code path of every `/zsh/` route.
+class ZshContext:
+    """How the garden logs and reports one request: `nolog`, `log_level`
+    and `failure_expected`, from the request and the garden's settings."""
+
+    def __init__(self, nolog, log_level, failure_expected):
+        self.nolog = nolog
+        self.log_level = log_level
+        self.failure_expected = failure_expected
+
+
+def zsh_prepare(request: Request, decode):
+    """Log a request and settle it when it runs nothing: the first step of
+    every `/zsh/` route.
 
     `decode()` gives the `ZshRequest`. It is called after `check_ip`, so a new
-    IP is noticed even when its request is malformed. Returns the request
-    and its `ZshOutcome`, which each route turns into its own reply.
+    IP is noticed even when its request is malformed. Returns the request,
+    its `ZshContext` and, for a request that runs nothing (a refusal, an
+    empty command, a magic command), its `ZshOutcome`; else None, and
+    `zsh_run` runs it.
     """
     ip, first_seen = check_ip(request, logger=logger)
     req_path = request_path_get(request)
@@ -177,6 +190,7 @@ def zsh_handle(request: Request, decode):
         log_level = max(log_level, 100)
 
     failure_expected = req.failure_expected
+    ctx = ZshContext(nolog, log_level, failure_expected)
     ##
 
     log = f"{ip} - cmd: {cmd}, session: {session}, stdin: {req.stdin_display}, brishes: {len(brishes)}, allBrishes: {len(allBrishes)}"
@@ -197,10 +211,10 @@ def zsh_handle(request: Request, decode):
         if not failure_expected and log_level >= 1:
             nolog or logger.warning(f"Request refused:\n{res.longstr}")
 
-        return req, ZshOutcome(res=res, refused=True)
+        return req, ctx, ZshOutcome(res=res, refused=True)
 
     if cmd == "":
-        return req, ZshOutcome(notice="Empty command received.")
+        return req, ctx, ZshOutcome(notice="Empty command received.")
     magic_matches = pattern_magic.match(cmd)
     if magic_matches is not None:
         magic_head = magic_matches.group(1)
@@ -213,10 +227,21 @@ def zsh_handle(request: Request, decode):
             log += "\nUnknown magic!"
             logger.warning("Unknown magic!")
 
-        return req, ZshOutcome(notice=log)
+        return req, ctx, ZshOutcome(notice=log)
 
+    return req, ctx, None
+
+
+def zsh_run(req, ctx, run):
+    """Run the request `req` on a worker: its session's Brish, or one taken
+    from the shared pool and given back afterwards. `run(brish,
+    server_index)` runs it and returns its CmdResult. An exception from it
+    gives retcode 9000 with the traceback as stderr; an
+    UninitializedBrishException (raised before anything ran) is retried.
+    """
     while True:
-        if session:
+        if req.session:
+            session = req.session
             # @design garbage collect
             myBrish, server_index = allBrishes.get(session, (None, None))
             if not myBrish:
@@ -231,33 +256,31 @@ def zsh_handle(request: Request, decode):
         ###
         res: CmdResult
         try:
-            res = brish_run(
-                myBrish,
-                req.cmd,
-                req.stdin,
-                merge=req.merge,
-                server_index=server_index,
-            )
+            res = run(myBrish, server_index)
         except UninitializedBrishException:
-            if log_level >= 2:
+            if ctx.log_level >= 2:
                 logger.info("Encountered UninitializedBrishException")
 
             time.sleep(1)
             continue
         except:
             res = CmdResult(RETCODE_GARDEN_ERROR, "", traceback.format_exc(), req.cmd, req.stdin)
-            log_level = max(log_level, 101)
+            ctx.log_level = max(ctx.log_level, 101)
 
-        if not session and not (server_index in brishes):
+        if not req.session and not (server_index in brishes):
             # duplicate brishes might be added here because of race conditions, but as brishes have their own locking, this doesn't matter, as we garbage-collect the dups here
             brishes.append(server_index)
 
-        break
-    ###
-    if not failure_expected and res.retcode != 0:
-        if log_level >= 1:
-            nolog or logger.warning(f"Command failed:\n{res.longstr}")
-            if log_level >= 1:
+        return res
+
+
+def zsh_finish(res, ctx):
+    """Log a command's failure and play the failure sound, after it ended
+    with the CmdResult `res`: the last step of every `/zsh/` route."""
+    if not ctx.failure_expected and res.retcode != 0:
+        if ctx.log_level >= 1:
+            ctx.nolog or logger.warning(f"Command failed:\n{res.longstr}")
+            if ctx.log_level >= 1:
                 zn(
                     """
                     if isMe && isLocal ; then
@@ -266,6 +289,25 @@ def zsh_handle(request: Request, decode):
                     """
                 )
 
+
+def zsh_handle(request: Request, decode):
+    """Log and run one request: the shared code path of every `/zsh/` route.
+
+    `decode()` gives the `ZshRequest` (see `zsh_prepare`). Returns the
+    request and its `ZshOutcome`, which each route turns into its own reply.
+    """
+    req, ctx, outcome = zsh_prepare(request, decode)
+    if outcome is not None:
+        return req, outcome
+
+    res = zsh_run(
+        req,
+        ctx,
+        lambda brish, server_index: brish_run(
+            brish, req.cmd, req.stdin, merge=req.merge, server_index=server_index
+        ),
+    )
+    zsh_finish(res, ctx)
     return req, ZshOutcome(res=res)
 
 
@@ -295,19 +337,21 @@ def cmd_zsh(body: dict, request: Request):
         logger.warning(traceback.format_exc())
 
 
+def raw_decode(request: Request, body: bytes, binary):
+    """The raw API's request decoder."""
+    return lambda: raw_request_parse(
+        body,
+        request.headers,
+        request.query_params,
+        binary_mode=binary,
+        encoding=getattr(brish_server, "encoding", "utf-8"),
+    )
+
+
 def cmd_zsh_raw_sync(request: Request, body: bytes):
     binary = garden_binary_p()
     try:
-        req, outcome = zsh_handle(
-            request,
-            lambda: raw_request_parse(
-                body,
-                request.headers,
-                request.query_params,
-                binary_mode=binary,
-                encoding=getattr(brish_server, "encoding", "utf-8"),
-            ),
-        )
+        req, outcome = zsh_handle(request, raw_decode(request, body, binary))
         return raw_reply(outcome, req.binary_reply)
     except:
         tb = traceback.format_exc()
