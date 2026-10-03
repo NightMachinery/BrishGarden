@@ -75,8 +75,9 @@ STDIN_HEADER = "X-Brish-Stdin"
 RETCODE_HEADER = "X-Brish-Retcode"
 OUT_LENGTH_HEADER = "X-Brish-Out-Length"
 NOTICE_HEADER = "X-Brish-Notice"
-#: Set on a reply for a request that ran nothing (a malformed request, or
-#: input that legacy mode cannot carry), so a client can retry it elsewhere
+#: Set on a reply for a request that ran nothing (a malformed request, or, on
+#: a legacy-mode garden, input it cannot carry or the option `binary=1`), so
+#: a client can retry it elsewhere
 #: without running it twice. A command that ran never gets it, whatever its
 #: retcode and stderr.
 REFUSED_HEADER = "X-Brish-Refused"
@@ -127,9 +128,12 @@ class ZshRequest:
     stdin: Any
     cmd_display: str
     stdin_display: str
-    #: The client sent `binary: 1`.
+    #: The client asked for exact output: `binary: 1` on the JSON API, the
+    #: query option `binary=1` on the raw and streaming APIs.
     binary_requested: bool
-    #: The reply is a binary reply: requested, and the garden runs in binary mode.
+    #: The reply carries exact bytes: on the JSON API when requested and the
+    #: garden runs in binary mode, on the raw and streaming APIs whenever the
+    #: garden runs in binary mode.
     binary_reply: bool
     #: The client sent `b64_only: 1`: a binary JSON reply leaves out the
     #: text fields `out` and `err`.

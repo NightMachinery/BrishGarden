@@ -28,11 +28,11 @@ MODES = [True, False]
 ALL_BYTES = bytes(range(256))
 
 
-def parse(cmd, stdin=b"", query=None, binary_mode=True, **headers):
+def parse(cmd, stdin=b"", query=None, binary_mode=True, stream=False, **headers):
     hdrs = {CMD_LENGTH_HEADER: str(len(cmd))}
     hdrs.update({k.replace("_", "-"): v for k, v in headers.items()})
     hdrs = {k: v for k, v in hdrs.items() if v is not None}
-    return raw_request_parse(cmd + stdin, hdrs, query or {}, binary_mode=binary_mode)
+    return raw_request_parse(cmd + stdin, hdrs, query or {}, binary_mode=binary_mode, stream=stream)
 
 
 def test_parse_splits_the_body():
@@ -107,13 +107,14 @@ def test_parse_malformed(binary_mode, body, headers, query, needle):
     assert (req.cmd, req.stdin) == ("", "")
 
 
+@pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize("value, want", [("1", True), ("y", True), ("", False), ("0", False), ("n", False), (None, False)])
-def test_parse_binary_option(value, want):
+def test_parse_binary_option(value, want, stream):
     query = {} if value is None else {"binary": value}
-    req = parse(b"print -r -- hi", b"in", query=query, binary_mode=True)
+    req = parse(b"print -r -- hi", b"in", query=query, binary_mode=True, stream=stream)
     assert req.error is None and req.binary_requested is want and req.binary_reply
-    assert (req.cmd, req.stdin) == (b"print -r -- hi", b"in")
-    req = parse(b"print -r -- hi", b"in", query=query, binary_mode=False)
+    assert (req.cmd, req.stdin, req.stream) == (b"print -r -- hi", b"in", stream)
+    req = parse(b"print -r -- hi", b"in", query=query, binary_mode=False, stream=stream)
     assert req.binary_requested is want and not req.binary_reply
     if want:
         #: Legacy mode cannot give exact bytes, so it refuses the request, as
@@ -123,6 +124,24 @@ def test_parse_binary_option(value, want):
         assert (req.cmd_display, req.stdin_display) == ("print -r -- hi", "in")
     else:
         assert req.error is None and (req.cmd, req.stdin) == ("print -r -- hi", "in")
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize(
+    "cmd, stdin, headers",
+    [
+        #: Requests that would otherwise get a notice, /dev/null stdin, or a
+        #: magic command, which restarts every worker.
+        (b"", b"", {}),
+        (b"cat", b"", {"x_brish_stdin": "null"}),
+        (b"%GARDEN_ALL x", b"", {}),
+    ],
+)
+def test_parse_binary_option_refuses_every_shape(cmd, stdin, headers, stream):
+    req = parse(cmd, stdin, query={"binary": "1"}, binary_mode=False, stream=stream, **headers)
+    assert req.error == LEGACY_REFUSAL, req.error
+    assert (req.cmd, req.stdin) == ("", "")
+    assert parse(cmd, stdin, query={"binary": "1"}, binary_mode=True, stream=stream, **headers).error is None
 
 
 def test_parse_binary_refusal_keeps_failure_expected():
@@ -382,6 +401,8 @@ def test_round_trip_legacy_mode():
             rc, out, err, h = handle(b, b"print -rn -- ran >> sentinel", query={"binary": "1"})
             assert (rc, h["x-brish-binary"], h["x-brish-refused"]) == (9000, "0", "1"), (rc, err)
             assert b"runs in legacy (text) mode" in err and b"Nothing was run" in err, err
+            rc, out, err, h = handle(b, b"print -rn -- ran >> sentinel", query={"binary": "1"}, x_brish_stdin="null")
+            assert (rc, h["x-brish-refused"]) == (9000, "1"), (rc, err)
             assert not os.path.exists(sentinel)
             rc, out, err, h = handle(b, b"print -rn -- ok", query={"binary": "0"})
             assert (rc, out, h["x-brish-binary"]) == (0, b"ok", "0"), (rc, err)

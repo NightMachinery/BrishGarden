@@ -916,6 +916,8 @@ def test_stream_legacy_mode():
             r = serve(b, b"print -rn -- ran >> sentinel", query={"binary": "1"})
             assert (r.retcode, r.headers["x-brish-binary"], r.headers["x-brish-refused"]) == (9000, "0", "1"), r
             assert b"runs in legacy (text) mode" in r.payload(FRAME_STDERR) and r.frames[0][1] == FRAME_STDERR, r
+            r = serve(b, b"print -rn -- ran >> sentinel", query={"binary": "1"}, x_brish_stdin="null")
+            assert (r.retcode, r.headers["x-brish-refused"]) == (9000, "1"), r
             assert not os.path.exists(sentinel)
             r = serve(b, b"print -rn -- ok", query={"binary": "0"})
             assert (r.retcode, r.payload(FRAME_STDOUT)) == (0, b"ok"), r
