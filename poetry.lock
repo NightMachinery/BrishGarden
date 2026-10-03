@@ -155,14 +155,14 @@ numpy = {version = ">=1.19.0,<3.0.0", markers = "python_version >= \"3.9\""}
 
 [[package]]
 name = "brish"
-version = "0.3.6"
+version = "0.4.1"
 description = "A bridge between zsh and Python."
 optional = false
-python-versions = "<4.dev0,>=3.7.0"
+python-versions = "<4,>=3.10"
 groups = ["main"]
 files = [
-    {file = "brish-0.3.6-py3-none-any.whl", hash = "sha256:c62fd3d78ed319cb78bb55d750b151d58ab91ea350bec8e64bb778cb9f968c1f"},
-    {file = "brish-0.3.6.tar.gz", hash = "sha256:03a490571b84cebb770e7e3cdd8ca6a6bfefcba6ab0264643c2a07ab3f8bb030"},
+    {file = "brish-0.4.1-py3-none-any.whl", hash = "sha256:f86b75c4cba4112cdc65d80a5de880c2afa704f7e3fd6176c46011020acf6a59"},
+    {file = "brish-0.4.1.tar.gz", hash = "sha256:ec54adef8f5c8b66254e1178959de8cf4563f01b95ab6fdcff58ae210c35aec2"},
 ]
 
 [package.dependencies]
@@ -2917,23 +2917,23 @@ windows-terminal = ["colorama (>=0.4.6)"]
 
 [[package]]
 name = "pynight"
-version = "0.2.5"
+version = "0.2.6"
 description = "My Python utility library."
 optional = false
 python-versions = "<4.0,>=3.8"
 groups = ["main"]
 files = [
-    {file = "pynight-0.2.5-py3-none-any.whl", hash = "sha256:192b491f8aa721b296184ac2f1e80c8577a6ef4f9ece4a9826241fcfaa34e0db"},
-    {file = "pynight-0.2.5.tar.gz", hash = "sha256:740ffcc0b3a8815714834a6517eb46022a7385e856b82dc44698b5f0b710ff53"},
+    {file = "pynight-0.2.6-py3-none-any.whl", hash = "sha256:ba6383ae44003cecc6cdd4c952a0cd4b49e9393d8079d8e9e0a5998b33619780"},
+    {file = "pynight-0.2.6.tar.gz", hash = "sha256:8c5ceb7728866ca316fdd8535c3a77a3513e333018efea439d59114a5145f0f8"},
 ]
 
 [package.dependencies]
 aiofile = "*"
-brish = ">=0.3.3,<0.4.0"
+brish = ">=0.3.3,<0.5"
 dnspython = ">=2.1.0,<3.0.0"
 executing = ">=1.2.0,<2.0.0"
 matplotlib = ">=3.7.1,<4.0.0"
-openai = ">=1.14.2,<2.0.0"
+openai = ">=1.14.2,<3"
 pyperclip = ">=1.8.2,<2.0.0"
 python-magic = "*"
 spacy = ">=3.5.1,<4.0.0"
