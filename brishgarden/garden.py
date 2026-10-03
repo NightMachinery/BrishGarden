@@ -252,7 +252,11 @@ def zsh_run(req, ctx, run):
             while len(brishes) <= 0:
                 time.sleep(1)
             myBrish = brish_server
-            server_index = brishes.pop()
+            try:
+                server_index = brishes.pop()
+            except IndexError:
+                #: Another thread took the last free worker meanwhile.
+                continue
         ###
         res: CmdResult
         try:
