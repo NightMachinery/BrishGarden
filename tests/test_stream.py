@@ -43,6 +43,7 @@ from brishgarden.stream import (
     outcome_frames,
     outcome_reply,
     stream_headers,
+    stream_report,
 )
 from tests.conftest import binary_only, legacy_only, run_py
 
@@ -240,6 +241,49 @@ def test_channel_frames_end_when_closed():
     asyncio.run(main())
 
 
+def test_channel_popen_after_cancel_is_killed():
+    #: The client left before the owner published its popen: popen_set
+    #: refuses it, the owner kills it, and the channel says it was killed,
+    #: so the garden reports a disconnect, not a failure.
+    ch = FrameChannel(None)
+    ch.cancel()
+    p = FakePopen()
+    assert not ch.popen_set(p)
+    assert ch.killed and ch.gone and p.kills == 0
+
+
+def test_stream_report():
+    def report(channel, res):
+        finished, lines = [], []
+        stream_report(channel, res, finished.append, lines.append)
+        return finished, lines
+
+    failed = StreamResult.from_bytes(3, b"", b"", "cmd", "")
+    killed = StreamResult.from_bytes(130, b"", b"", "cmd", "")
+    #: Nothing ran: one line, no failure log or sound.
+    ch = FrameChannel(None)
+    ch.cancel()
+    assert report(ch, None) == ([], ["Stream: the client went away before the command started; nothing ran."])
+    #: Killed through popen_set (the client left while popen started).
+    ch = FrameChannel(None)
+    ch.cancel()
+    ch.popen_set(FakePopen())
+    assert report(ch, killed) == ([], ["Stream: the client went away, so the command was killed; retcode 130."])
+    #: Killed by cancel() while it ran.
+    ch = FrameChannel(None)
+    ch.popen_set(FakePopen())
+    ch.cancel()
+    assert report(ch, killed) == ([], ["Stream: the client went away, so the command was killed; retcode 130."])
+    #: A command that ended by itself is reported as usual, also when its
+    #: client left after its end.
+    ch = FrameChannel(None)
+    p = FakePopen()
+    ch.popen_set(p)
+    p.retcode = 3
+    ch.cancel()
+    assert report(ch, failed) == ([failed], [])
+
+
 def test_channel_cancel_spares_an_ended_command():
     ch = FrameChannel(None)
     p = FakePopen()
@@ -425,7 +469,7 @@ import asyncio, threading, time
 from brishgarden.reply import ZshOutcome, raw_request_parse
 from brishgarden.stream import (
     FRAME_EXIT, FRAME_STDERR, FRAME_STDOUT, FrameDecoder, StreamResponse,
-    outcome_reply, stream_headers, stream_own, stream_run,
+    outcome_reply, stream_headers, stream_own, stream_report, stream_run,
 )
 
 class Reply:
@@ -441,7 +485,11 @@ class Reply:
         assert len(exits) <= 1 and (not exits or self.frames[-1][1] == FRAME_EXIT), self
         return int(exits[0]) if exits else None
 
-def serve(b, cmd, stdin=b"", query=None, disconnect_after=None, send_delay=0, block_send=False, **headers):
+def serve(b, cmd, stdin=b"", query=None, disconnect_after=None, send_delay=0, block_send=False,
+          late_popen=False, **headers):
+    #: late_popen: the owner waits until the client is gone before it calls
+    #: stream_run, as when the client leaves between the garden's last check
+    #: and popen.
     hdrs = {"x-brish-cmd-length": str(len(cmd))}
     hdrs.update({k.replace("_", "-"): v for k, v in headers.items()})
     req = raw_request_parse(cmd + stdin, hdrs, query or {}, binary_mode=b.binary, encoding=b.encoding, stream=True)
@@ -455,8 +503,19 @@ def serve(b, cmd, stdin=b"", query=None, disconnect_after=None, send_delay=0, bl
     owner = {}
 
     def start(channel):
+        def go():
+            if late_popen:
+                deadline = time.monotonic() + 10
+                while not channel.gone and time.monotonic() < deadline:
+                    time.sleep(0.01)
+            elif channel.gone:
+                return None
+            return stream_run(b, 0, req, channel)
+
         def run():
-            reply.res = stream_own(channel, lambda: None if channel.gone else stream_run(b, 0, req, channel))
+            reply.res = stream_own(channel, go)
+            reply.report = []
+            stream_report(channel, reply.res, lambda res: reply.report.append(("finish", res.retcode)), reply.report.append)
         owner["thread"] = threading.Thread(target=run, daemon=True)
         owner["thread"].start()
 
@@ -620,6 +679,16 @@ def test_stream_disconnect_kills_the_command():
             assert not os.path.exists(sentinel) and r.retcode is None, r
             assert r.res is None or r.res.retcode == 130, r.res
             assert b.send_cmd("print -rn -- ok", server_index=0).out == "ok"
+
+            #: A client gone just before popen: popen_set refuses the popen,
+            #: the owner kills it, and the garden reports a disconnect (one
+            #: info line), not a failure (no failure log, no sound).
+            r = serve(b, b"sleep 0.5; print -r -- ran >> sentinel", disconnect_after=0.2, late_popen=True)
+            time.sleep(1)
+            assert not os.path.exists(sentinel) and r.retcode is None, r
+            assert r.res.retcode == 130 and r.channel.killed, r.res
+            assert r.report == ["Stream: the client went away, so the command was killed; retcode 130."], r.report
+            assert b.send_cmd("print -rn -- $kept", server_index=0).out == "yes"
         finally:
             b.cleanup()
         """

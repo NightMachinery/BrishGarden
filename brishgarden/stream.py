@@ -186,7 +186,7 @@ class FrameChannel:
     The owner publishes its BrishPopen with `popen_set` once it runs, and
     kills it when that returns False; `cancel()` sets `gone` before it reads
     the published popen. So whichever comes first, a command whose client
-    is gone is killed.
+    is gone is killed, and `killed` says so.
     """
 
     def __init__(self, loop, max_bytes=CHANNEL_BYTES):
@@ -202,7 +202,8 @@ class FrameChannel:
         self._popen = None
         #: The command started (popen returned), so frames may have gone out.
         self.started = False
-        #: cancel() killed the command while it ran.
+        #: The command was killed because its client went away: by cancel()
+        #: while it ran, or by its owner when popen_set() came too late.
         self.killed = False
 
     @property
@@ -242,10 +243,14 @@ class FrameChannel:
 
     def popen_set(self, p):
         """Publish the running BrishPopen `p`. Returns False when the client
-        is gone already; the caller then kills `p`."""
+        is gone already; the caller then kills `p`, and `killed` is set, so
+        the garden reports a disconnect and not a failure."""
         with self._cond:
             self._popen = p
-            return not self._gone
+            if self._gone:
+                self.killed = True
+                return False
+            return True
 
     def _wake(self):
         try:
@@ -409,6 +414,24 @@ def stream_own(channel, run):
         raise
     finally:
         channel.close()
+
+
+def stream_report(channel, res, finish, info):
+    """Report the end of a streamed command whose run on `channel` gave
+    `res` (None: nothing ran).
+
+    A command killed because its client went away (`channel.killed`) is not
+    a failure: `info` gets one line with its retcode, and `finish` (the
+    garden's failure log and sound) is not called. Neither is it when
+    nothing ran. Any other result goes to `finish`, also when the client
+    left after the command's end.
+    """
+    if res is None:
+        info("Stream: the client went away before the command started; nothing ran.")
+    elif channel.killed:
+        info(f"Stream: the client went away, so the command was killed; retcode {res.retcode}.")
+    else:
+        finish(res)
 
 
 class StreamResponse(StreamingResponse):

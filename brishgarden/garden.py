@@ -31,6 +31,7 @@ from brishgarden.stream import (
     outcome_reply as stream_outcome_reply,
     stream_headers,
     stream_own,
+    stream_report,
     stream_run,
 )
 
@@ -409,7 +410,8 @@ def stream_owner(req, ctx, channel):
 
     A command killed because its client went away is not a failure: the
     garden logs one info line with its retcode, with no failure log and no
-    sound. One whose client left after its end is reported as usual.
+    sound (`stream_report`). One whose client left after its end is
+    reported as usual.
     """
     res = stream_own(
         channel,
@@ -420,14 +422,12 @@ def stream_owner(req, ctx, channel):
             cancelled=lambda: channel.gone,
         ),
     )
-    if res is None:
-        ctx.nolog or logger.info("Stream: the client went away before the command started; nothing ran.")
-    elif channel.killed:
-        ctx.nolog or logger.info(
-            f"Stream: the client went away, so the command was killed; retcode {res.retcode}."
-        )
-    else:
-        zsh_finish(res, ctx)
+    stream_report(
+        channel,
+        res,
+        lambda res: zsh_finish(res, ctx),
+        lambda line: ctx.nolog or logger.info(line),
+    )
 
 
 @app.post("/zsh/stream/")
