@@ -77,6 +77,30 @@ def test_session_take_gives_up_while_a_new_session_boots():
     taken[2].release()
 
 
+def test_session_take_discards_the_brish_that_lost_the_race():
+    class Discardable(FakeBrish):
+        def __init__(self):
+            self.cleaned = threading.Event()
+
+        def cleanup(self):
+            self.cleaned.set()
+
+    sessions = {}
+    first = Discardable()
+    made = []
+
+    def make():
+        #: Another first request stores its Brish while this one boots.
+        sessions["race"] = (first, 0)
+        made.append(Discardable())
+        return made[-1]
+
+    taken = session_take(sessions, "race", make)
+    assert taken[0] is first and sessions == {"race": (first, 0)}
+    taken[2].release()
+    assert made[0].cleaned.wait(5) and not first.cleaned.is_set()
+
+
 def test_abandoned_session_waiters_free_their_threads():
     #: More streams wait for a busy session than the pool has owner threads;
     #: once their clients are gone, each gives its thread back within a

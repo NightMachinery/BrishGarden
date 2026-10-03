@@ -71,9 +71,15 @@ def session_take(sessions, session, make, cancelled=None, poll=SESSION_POLL):
     """
     entry = sessions.get(session)
     if entry is None:
+        mine = make()
         #: setdefault is atomic: of two first requests, both boot a Brish,
-        #: and both use the one stored first.
-        entry = sessions.setdefault(session, (make(), 0))
+        #: and both use the one stored first. The other one is never used:
+        #: stop its worker, in the background, since that takes a moment.
+        entry = sessions.setdefault(session, (mine, 0))
+        if entry[0] is not mine:
+            threading.Thread(
+                target=mine.cleanup, name="brishgarden-session-discard", daemon=True
+            ).start()
     brish, server_index = entry
     lock = session_lock(brish)
     if not lock_wait(lock, cancelled, poll):
