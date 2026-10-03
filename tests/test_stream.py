@@ -467,6 +467,7 @@ def test_daemon_pool_survives_a_failing_job():
 HANDLE = r'''
 import asyncio, threading, time
 from brishgarden.reply import ZshOutcome, raw_request_parse
+from brishgarden.sessions import session_take
 from brishgarden.stream import (
     FRAME_EXIT, FRAME_STDERR, FRAME_STDOUT, FrameDecoder, StreamResponse,
     outcome_reply, stream_headers, stream_own, stream_report, stream_run,
@@ -486,13 +487,16 @@ class Reply:
         return int(exits[0]) if exits else None
 
 def serve(b, cmd, stdin=b"", query=None, disconnect_after=None, send_delay=0, block_send=False,
-          late_popen=False, **headers):
+          late_popen=False, session=None, **headers):
     #: late_popen: the owner waits until the client is gone before it calls
     #: stream_run, as when the client leaves between the garden's last check
     #: and popen.
+    #: session: (sessions, name, make) runs the command on that session, as
+    #: the garden's zsh_run does (session_take, which waits for the session
+    #: and gives up when the client is gone), instead of on worker 0 of `b`.
     hdrs = {"x-brish-cmd-length": str(len(cmd))}
     hdrs.update({k.replace("_", "-"): v for k, v in headers.items()})
-    req = raw_request_parse(cmd + stdin, hdrs, query or {}, binary_mode=b.binary, encoding=b.encoding, stream=True)
+    req = raw_request_parse(cmd + stdin, hdrs, query or {}, binary_mode=BINARY, encoding="utf-8", stream=True)
     outcome = None
     if req.error is not None:
         outcome = ZshOutcome(res=CmdResult(9000, "", req.error, req.cmd_display, req.stdin_display), refused=True)
@@ -510,7 +514,16 @@ def serve(b, cmd, stdin=b"", query=None, disconnect_after=None, send_delay=0, bl
                     time.sleep(0.01)
             elif channel.gone:
                 return None
-            return stream_run(b, 0, req, channel)
+            if session is None:
+                return stream_run(b, 0, req, channel)
+            taken = session_take(*session, lambda: channel.gone)
+            if taken is None:
+                return None
+            sb, index, lock = taken
+            try:
+                return stream_run(sb, index, req, channel)
+            finally:
+                lock.release()
 
         def run():
             reply.res = stream_own(channel, go)
@@ -691,6 +704,57 @@ def test_stream_disconnect_kills_the_command():
             assert b.send_cmd("print -rn -- $kept", server_index=0).out == "yes"
         finally:
             b.cleanup()
+        """
+    )
+
+
+def test_stream_session_wait_gives_up():
+    #: A stream that waits for its session runs nothing when its client
+    #: leaves meanwhile: while the session is busy, and while a new
+    #: session's worker boots.
+    run_handle(
+        r"""
+        sentinel = os.path.join(os.getcwd(), "sentinel")
+        made = []
+
+        def make(boot=0):
+            time.sleep(boot)  #: a garden's worker boots in about a second
+            made.append(garden_brish(server_count=1))
+            return made[-1]
+
+        sessions = {}
+        nothing_ran = ["Stream: the client went away before the command started; nothing ran."]
+        try:
+            sess = (sessions, "s", make)
+            pid = serve(None, b"typeset -g kept=yes; print -rn -- $$", session=sess).payload(FRAME_STDOUT)
+            got = {}
+            a = threading.Thread(target=lambda: got.setdefault("a", serve(None, b"sleep 2; print -r -- A done", session=sess)))
+            a.start()
+            time.sleep(0.3)
+            r = serve(None, b"print -r -- ran >> sentinel; sleep 5", disconnect_after=0.5, session=sess)
+            assert r.res is None and r.frames == [] and r.report == nothing_ran, r
+            #: The owner gave up within a poll of the disconnect.
+            assert r.ended < 1, r.ended
+            a.join(30)
+            assert (got["a"].retcode, got["a"].payload(FRAME_STDOUT)) == (0, b"A done\n"), got["a"]
+            time.sleep(1)
+            assert not os.path.exists(sentinel)
+            r = serve(None, b"print -rn -- $kept $$", session=sess)
+            assert (r.retcode, r.payload(FRAME_STDOUT)) == (0, b"yes " + pid), r
+
+            new = (sessions, "new", lambda: make(boot=0.6))
+            r = serve(None, b"print -r -- ran >> sentinel; sleep 2", disconnect_after=0.2, session=new)
+            assert r.res is None and r.report == nothing_ran, r
+            time.sleep(2.5)
+            assert not os.path.exists(sentinel)
+            #: The new session is there, idle, for the next request.
+            assert "new" in sessions and len(made) == 2
+            r = serve(None, b"print -rn -- ok", session=new)
+            assert (r.retcode, r.payload(FRAME_STDOUT)) == (0, b"ok"), r
+            assert len(made) == 2
+        finally:
+            for b in made:
+                b.cleanup()
         """
     )
 

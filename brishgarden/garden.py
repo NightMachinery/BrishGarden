@@ -25,6 +25,7 @@ from brishgarden.reply import (
     raw_request_parse,
     request_parse,
 )
+from brishgarden.sessions import session_take
 from brishgarden.stream import (
     DaemonPool,
     StreamResponse,
@@ -257,20 +258,30 @@ def zsh_run(req, ctx, run, cancelled=None):
     gives retcode 9000 with the traceback as stderr; an
     UninitializedBrishException (raised before anything ran) is retried.
 
-    `cancelled()`, checked while no worker is free, returns True when the
-    request is no longer wanted; then nothing runs, and the result is None.
+    A session request holds its session's lock while it runs, and waits for
+    it while the session is busy (see brishgarden/sessions.py).
+
+    `cancelled()` returns True when the request is no longer wanted. It is
+    checked while the request waits for a worker (a free pool worker, a
+    busy session, a new session's boot) and once more when it has one; once
+    it is True, nothing runs, and the result is None.
     """
     while True:
         if cancelled is not None and cancelled():
             return None
+        session_lock = None
         if req.session:
             session = req.session
             # @design garbage collect
-            myBrish, server_index = allBrishes.get(session, (None, None))
-            if not myBrish:
-                myBrish, server_index = allBrishes.setdefault(
-                    session, (newBrish(session=session, server_count=1), 0)
-                )  # is atomic https://bugs.python.org/issue13521#:~:text=setdefault()%20was%20intended%20to,()%20which%20can%20call%20arbitrary
+            taken = session_take(
+                allBrishes,
+                session,
+                lambda: newBrish(session=session, server_count=1),
+                cancelled,
+            )
+            if taken is None:
+                return None
+            myBrish, server_index, session_lock = taken
         else:
             while len(brishes) <= 0:
                 time.sleep(1)
@@ -284,17 +295,24 @@ def zsh_run(req, ctx, run, cancelled=None):
                 continue
         ###
         res: CmdResult
+        retry = False
         try:
             res = run(myBrish, server_index)
         except UninitializedBrishException:
+            retry = True
+        except:
+            res = CmdResult(RETCODE_GARDEN_ERROR, "", traceback.format_exc(), req.cmd, req.stdin)
+            ctx.log_level = max(ctx.log_level, 101)
+        finally:
+            if session_lock is not None:
+                session_lock.release()
+
+        if retry:
             if ctx.log_level >= 2:
                 logger.info("Encountered UninitializedBrishException")
 
             time.sleep(1)
             continue
-        except:
-            res = CmdResult(RETCODE_GARDEN_ERROR, "", traceback.format_exc(), req.cmd, req.stdin)
-            ctx.log_level = max(ctx.log_level, 101)
 
         if not req.session and not (server_index in brishes):
             # duplicate brishes might be added here because of race conditions, but as brishes have their own locking, this doesn't matter, as we garbage-collect the dups here
