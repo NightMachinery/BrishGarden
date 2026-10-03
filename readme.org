@@ -83,7 +83,7 @@ that has logged in to the proxy may attach its basic-auth credentials.
 
 The command =%GARDEN_ALL= restarts every Brish.
 
-To send and receive exact bytes without JSON or base64, use the raw API (=POST /zsh/raw/=, below) instead.
+To send and receive exact bytes without JSON or base64, use the raw API (=POST /zsh/raw/=, below) instead; to get the output while the command runs, the streaming API (=POST /zsh/stream/=, below).
 
 ** Binary data (opt-in)
 JSON strings cannot carry arbitrary bytes, so optional fields do it with base64:
@@ -110,7 +110,7 @@ Without =binary: 1=, the =_b64= fields still deliver exact input, and the reply 
 Requests without the new fields get the replies they always got, with the differences below in binary mode. From a garden in legacy mode they are byte-identical to the replies of a garden older than these fields that runs the same Brish, so =BRISH_BINARY=0= is also the way back to the old replies. In binary mode, the default, the text views are exact, so replies differ only where legacy mode lost information: a =\r= is kept, where the legacy mode of older Brish turns =\r\n= and a lone =\r= into a newline and drops a trailing =\r= (Brish's legacy mode keeps them too since its legacy backports of October 2026); and a NUL in the output no longer desynchronizes the worker. Binary mode also changes how some commands end (=exit=, NOMATCH errors, =errexit=); see Brish's readme. In both modes, a lone surrogate in a text field of the reply (a JSON request can smuggle one in with a =\udcff= escape) is escaped as text, where it used to make the reply fail.
 
 ** Raw API
-=POST /zsh/raw/= runs a command like =/zsh/=, but carries bytes as bytes in both directions, with no JSON and no base64. =POST /zsh/raw/nolog/= is its variant without an access-log line (the =nolog= routes hide that line also when the URL has a query string). It needs the =X-API-Key= header like every endpoint.
+=POST /zsh/raw/= runs a command like =/zsh/=, but carries bytes as bytes in both directions, with no JSON and no base64. =POST /zsh/raw/nolog/= is its variant without an access-log line (the =nolog= routes hide that line also when the URL has a query string). It needs the =X-API-Key= header like every endpoint. Its reply comes when the command has ended; the streaming API ("Streaming API", below) takes the same request and sends the output while the command runs.
 
 The request:
 - The body is the command's bytes followed by its stdin's bytes.
@@ -139,6 +139,43 @@ print -rn -- "$cmd"$'\xff\0' |
 Here the reply body is the two bytes =\xff\0= from stdout and then =done= from stderr, with =x-brish-out-length: 2=. The length counts bytes, which =wc -c= does; zsh's =${#cmd}= counts characters.
 
 A garden older than the raw API answers =404= for these routes, without running anything. A client can rely on that to fall back to the JSON API, knowing that nothing ran.
+
+** Streaming API
+=POST /zsh/stream/= runs a command like =/zsh/raw/= and sends its output while it runs: each piece of stdout and stderr goes out as soon as the garden reads it from the worker. =POST /zsh/stream/nolog/= is its variant without an access-log line. =brishzgo= uses it with =brishz_stream=y= (see =docs/brishzgo.md= in the scripts repository).
+
+The request is exactly the raw API's (see "Raw API" above): the body is the command's bytes and then stdin's, with =X-Brish-Cmd-Length=, the optional =X-Brish-Stdin: null=, and the same query parameters (=session=, =nolog=, =log_level=, =failure_expected=, =merge=). The garden parses it with the same code, checks the same =X-API-Key=, and logs, notifies and plays the failure sound exactly as for the other APIs (the failure sound after a command that ends non-zero); the access log marks it with =, stream=. Sessions, the shared pool, magic commands such as =%GARDEN_ALL= and notices work as on the raw API. The whole request body is read before the command starts, as on the raw API, so stdin is not streamed into the command.
+
+The reply is HTTP 200, =application/octet-stream=, sent chunked. Its headers go out before any output, so they cannot depend on it:
+- =X-Brish-Stream: 1= marks a streaming reply.
+- =X-Brish-Binary= is =1= in binary mode, where the bytes are exact, and =0= in legacy mode, as on the raw API.
+- A request that runs nothing gets =X-Brish-Refused: 1= (a refusal, exactly when the raw API would refuse it: a malformed request, or NUL or invalid UTF-8 on a legacy-mode garden) or =X-Brish-Notice: 1= (an empty command, a magic command). A client may retry a refused request another way without running it twice.
+
+The body is a sequence of *frames*. A frame is a type byte, then the payload's length as 4 bytes, big-endian and unsigned, then the payload:
+- type 1: bytes the command wrote to stdout, as the garden read them (never empty);
+- type 2: bytes it wrote to stderr, or a message of the garden (never empty);
+- type 3, the *exit frame*: the retcode in decimal ASCII, such as =0=, =130= or =9000=.
+
+Every complete reply ends with exactly one exit frame, and nothing follows it. A body that ends without one was cut short (the garden died, say), and the output before that point is all there is. A client should skip frames of any other type, which later gardens may add. A refusal is one stderr frame with the message and the exit frame =9000=; a notice is one stdout frame with the text and the exit frame =0=; an exception while the command ran ends the reply with its traceback in a stderr frame and =9000=. With =merge=1=, every output frame is a stdout frame, in the order the garden read the output, so the client sees one stream (the garden's own refusals and tracebacks stay in stderr frames). =brishgarden/stream.py= has the reference decoder, =FrameDecoder=.
+
+#+begin_example zsh
+cmd='print -r -- one; sleep 1; print -r -- two >&2; return 3'
+print -rn -- "$cmd" |
+    curl --silent --no-buffer --header @$HOME/.keys/brishgarden --header 'Content-Type: application/octet-stream' \
+         --header "X-Brish-Cmd-Length: $(print -rn -- "$cmd" | wc -c | tr -d ' ')" --data-binary @- \
+         --dump-header /dev/stderr http://127.0.0.1:7230/zsh/stream/ | od -c
+#+end_example
+
+Here =od= shows the frames =001 \0 \0 \0 004 o n e \n= (stdout), =002 \0 \0 \0 004 t w o \n= (stderr) and the exit frame =003 \0 \0 \0 001 3=. The first left the garden at once and the second a second later, though =od= prints nothing until its own buffer fills or the reply ends.
+
+The output comes as the worker produces it, but a program whose stdout is a pipe may buffer its own output (C's stdio, Python without =-u=), and then sends it in bursts; the garden adds no buffering of its own. A reverse proxy that buffers responses delays the frames too; this was tested only on =127.0.0.1=.
+
+*Disconnects.* When the client goes away before the command ends (it closed the connection, or it was interrupted: =brishzgo= closes the connection on SIGINT, SIGTERM and SIGHUP), the garden kills the command at once, with the escalation of Brish's =BrishPopen.kill= (SIGINT to the worker, then SIGINT and SIGTERM to its descendants, then SIGKILL), reads what is left of its output, and gives the worker back, ready for the next request; a session keeps its state. The garden logs one info line with the retcode, and neither the failure log nor the failure sound: the client asked for the end. A command that traps SIGINT goes on until the escalation reaches what it waits on. This is the one API where the client's going away stops the command; the JSON and raw APIs run it to its end, since they only write to the connection once they have the whole reply.
+
+*Readers that do not read.* A client that stays connected but stops reading holds its command: the garden queues at most 256 KiB of frames for it (beyond the sockets' own buffers), and then the command blocks on its own output, as a local command does when its pipe is full. Nothing times this out, so such a command keeps its worker, a session waits for it, and a restart (=%GARDEN_ALL=), which waits for every worker, waits for it too. Backpressure keeps the garden's memory flat: a reader that took 200 MB at 1.7 MB/s kept the garden's RSS under 50 MiB, from 23 MiB before the stream. The commands' owner threads, one per open stream, are bounded at the pool's size plus 16; further streams wait for a thread, and one whose client leaves meanwhile runs nothing.
+
+*Legacy mode* (=BRISH_BINARY=0=) streams too, with the limits of Brish's legacy transport: a NUL or invalid UTF-8 in the command or stdin is refused, the output goes through text, and Brish holds back a trailing newline until more output comes or the command ends, so a line shows without its newline until then.
+
+A garden older than the streaming API answers =404= (FastAPI's ={"detail":"Not Found"}=) for these routes, without running anything, so a client can fall back to the raw API, and from there to the JSON API, knowing that nothing ran.
 
 * environment variables
 ** =BRISHGARDEN_N= sets the number of Brishes started by default

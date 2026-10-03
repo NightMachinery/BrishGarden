@@ -6,11 +6,14 @@ it can be imported (and tested) without side effects.
 
 A request goes through three steps. Decoding turns it into a `ZshRequest`;
 the garden's `zsh_handle` logs it and runs it, giving a `ZshOutcome`; and a
-reply builder turns that outcome into the endpoint's reply. There are two
+reply builder turns that outcome into the endpoint's reply. There are three
 APIs, which share the middle step:
 - the JSON API (`/zsh/`): `request_parse` and `json_reply`;
 - the raw API (`/zsh/raw/`), which carries bytes as bytes in both
-  directions: `raw_request_parse` and `raw_reply`.
+  directions: `raw_request_parse` and `raw_reply`;
+- the streaming API (`/zsh/stream/`), which takes the raw API's request
+  (`raw_request_parse` with `stream=True`) and sends the output while the
+  command runs, in frames: see `brishgarden/stream.py`.
 
 Binary transport is opt-in per request (see the readme):
 - `cmd_b64` and `stdin_b64` carry the command and its stdin as base64 of raw
@@ -136,8 +139,11 @@ class ZshRequest:
     nolog: bool = False
     log_level: int = 1
     failure_expected: bool = False
-    #: The request came through the raw API.
+    #: The request came through the raw API, or the streaming API, which
+    #: takes the raw API's request.
     raw: bool = False
+    #: The request came through the streaming API.
+    stream: bool = False
 
 
 @dataclass(frozen=True)
@@ -343,7 +349,7 @@ def _raw_payloads(body, headers):
     return cmd, stdin
 
 
-def raw_request_parse(body, headers, query, *, binary_mode, encoding="utf-8"):
+def raw_request_parse(body, headers, query, *, binary_mode, encoding="utf-8", stream=False):
     """Decode a raw API (`/zsh/raw/`) request into a `ZshRequest`.
 
     `body` is the command's bytes followed by its stdin's, split at the
@@ -353,6 +359,9 @@ def raw_request_parse(body, headers, query, *, binary_mode, encoding="utf-8"):
     values is refused). In binary mode the command and stdin
     stay bytes, and `X-Brish-Stdin: null` makes stdin /dev/null. In legacy
     mode they are decoded strictly as `encoding`, and null stdin is empty.
+
+    The streaming API (`/zsh/stream/`) takes the same request, decoded here
+    with `stream=True`, which only marks it as streamed.
 
     Never raises for a malformed request; it sets `error` instead.
     """
@@ -393,6 +402,7 @@ def raw_request_parse(body, headers, query, *, binary_mode, encoding="utf-8"):
         binary_reply=bool(binary_mode),
         error=error,
         raw=True,
+        stream=bool(stream),
         **opts,
     )
 
@@ -405,7 +415,7 @@ def brish_cmd(brish, cmd, merge):
     """The command text that `brish` runs for a request's command `cmd`.
 
     With `merge` (the plain reply path, which has a single body, and the
-    `merge` option of the raw API), `cmd` runs inside an
+    `merge` option of the raw and streaming APIs), `cmd` runs inside an
     `eval` whose stderr is merged into stdout in the shell. In binary mode a
     bytes `cmd` is quoted byte-exactly into that wrapper.
     """

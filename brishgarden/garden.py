@@ -25,6 +25,14 @@ from brishgarden.reply import (
     raw_request_parse,
     request_parse,
 )
+from brishgarden.stream import (
+    DaemonPool,
+    StreamResponse,
+    outcome_reply as stream_outcome_reply,
+    stream_headers,
+    stream_own,
+    stream_run,
+)
 
 settings = FastAPISettings()
 
@@ -53,7 +61,11 @@ class PathSet(tuple):
 
 
 skip_paths = PathSet(
-    ("/zsh/nolog/", "/api/v1/zsh/nolog/", "/zsh/raw/nolog/", "/api/v1/zsh/raw/nolog/")
+    (
+        "/zsh/nolog/", "/api/v1/zsh/nolog/",
+        "/zsh/raw/nolog/", "/api/v1/zsh/raw/nolog/",
+        "/zsh/stream/nolog/", "/api/v1/zsh/stream/nolog/",
+    )
 )
 logging.getLogger("uvicorn.access").addFilter(EndpointLoggingFilter1(isDbg=isDbg, logger=logger, skip_paths=skip_paths))
 ###
@@ -64,6 +76,9 @@ except:
     brishes_n = brishes_n_default
 
 executor = async_max_workers_set(brishes_n + 16)
+#: The owner threads of streamed commands, one per command while it runs
+#: (see brishgarden/stream.py). A stream beyond these waits for one to end.
+stream_pool = DaemonPool(brishes_n + 16, "garden-stream", logger=logger)
 ###
 #: Binary mode by default; `BRISH_BINARY=0` selects legacy mode. Every Brish
 #: the garden creates gets it as `binary=`, and the garden never writes
@@ -198,7 +213,9 @@ def zsh_prepare(request: Request, decode):
         log+=", failure_expected"
     if req.binary_requested:
         log+=", binary"
-    if req.raw:
+    if req.stream:
+        log+=", stream"
+    elif req.raw:
         log+=", raw"
 
     nolog or logger.info(log)
@@ -232,14 +249,19 @@ def zsh_prepare(request: Request, decode):
     return req, ctx, None
 
 
-def zsh_run(req, ctx, run):
+def zsh_run(req, ctx, run, cancelled=None):
     """Run the request `req` on a worker: its session's Brish, or one taken
     from the shared pool and given back afterwards. `run(brish,
     server_index)` runs it and returns its CmdResult. An exception from it
     gives retcode 9000 with the traceback as stderr; an
     UninitializedBrishException (raised before anything ran) is retried.
+
+    `cancelled()`, checked while no worker is free, returns True when the
+    request is no longer wanted; then nothing runs, and the result is None.
     """
     while True:
+        if cancelled is not None and cancelled():
+            return None
         if req.session:
             session = req.session
             # @design garbage collect
@@ -251,6 +273,8 @@ def zsh_run(req, ctx, run):
         else:
             while len(brishes) <= 0:
                 time.sleep(1)
+                if cancelled is not None and cancelled():
+                    return None
             myBrish = brish_server
             try:
                 server_index = brishes.pop()
@@ -295,7 +319,8 @@ def zsh_finish(res, ctx):
 
 
 def zsh_handle(request: Request, decode):
-    """Log and run one request: the shared code path of every `/zsh/` route.
+    """Log and run one request: the shared code path of the JSON and raw
+    routes (the streaming route runs the same steps in its own order).
 
     `decode()` gives the `ZshRequest` (see `zsh_prepare`). Returns the
     request and its `ZshOutcome`, which each route turns into its own reply.
@@ -341,14 +366,15 @@ def cmd_zsh(body: dict, request: Request):
         logger.warning(traceback.format_exc())
 
 
-def raw_decode(request: Request, body: bytes, binary):
-    """The raw API's request decoder."""
+def raw_decode(request: Request, body: bytes, binary, stream=False):
+    """The raw API's request decoder, which the streaming API shares."""
     return lambda: raw_request_parse(
         body,
         request.headers,
         request.query_params,
         binary_mode=binary,
         encoding=getattr(brish_server, "encoding", "utf-8"),
+        stream=stream,
     )
 
 
@@ -374,6 +400,65 @@ async def cmd_zsh_raw(request: Request):
     would, and never blocks the event loop."""
     body = await request.body()
     return await run_in_threadpool(cmd_zsh_raw_sync, request, body)
+
+
+def stream_owner(req, ctx, channel):
+    """The owner thread of one streamed command: it runs the command with
+    `popen` on a worker and puts its frames on `channel` (see
+    brishgarden/stream.py).
+
+    A command killed because its client went away is not a failure: the
+    garden logs one info line with its retcode, with no failure log and no
+    sound. One whose client left after its end is reported as usual.
+    """
+    res = stream_own(
+        channel,
+        lambda: zsh_run(
+            req,
+            ctx,
+            lambda brish, server_index: stream_run(brish, server_index, req, channel),
+            cancelled=lambda: channel.gone,
+        ),
+    )
+    if res is None:
+        ctx.nolog or logger.info("Stream: the client went away before the command started; nothing ran.")
+    elif channel.killed:
+        ctx.nolog or logger.info(
+            f"Stream: the client went away, so the command was killed; retcode {res.retcode}."
+        )
+    else:
+        zsh_finish(res, ctx)
+
+
+@app.post("/zsh/stream/")
+@app.post("/zsh/stream/nolog/")
+async def cmd_zsh_stream(request: Request):
+    """The streaming API: the raw API's request, and the output in frames
+    while the command runs; see brishgarden/stream.py and the readme.
+
+    Logging, refusals, notices and magic go through `zsh_prepare` in the
+    thread pool. A command then runs in an owner thread of `stream_pool`,
+    started when the response starts; the event loop only moves frames, and
+    kills the command when the client goes away.
+    """
+    body = await request.body()
+    binary = garden_binary_p()
+    try:
+        req, ctx, outcome = await run_in_threadpool(
+            zsh_prepare, request, raw_decode(request, body, binary, stream=True)
+        )
+    except Exception:
+        tb = traceback.format_exc()
+        logger.warning(tb)
+        return stream_outcome_reply(
+            ZshOutcome(res=CmdResult(RETCODE_GARDEN_ERROR, "", tb, "", "")), binary
+        )
+    if outcome is not None:
+        return stream_outcome_reply(outcome, req.binary_reply)
+    return StreamResponse(
+        lambda channel: stream_pool.submit(stream_owner, req, ctx, channel),
+        stream_headers(req.binary_reply),
+    )
 
 
 ## Security: every endpoint requires the `X-API-Key` header (see the app above).
