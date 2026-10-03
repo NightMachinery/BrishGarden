@@ -119,12 +119,14 @@ def init_brishes(erase_sessions=True):
     global brish_server, brishes, allBrishes
 
     brishes = []  # helps avoid UninitializedBrishException
+    #: Pass the old instances themselves: a lambda would read the globals
+    #: only when the executor runs it, and by then they may name the new pool.
     if erase_sessions:
         if allBrishes:  # @noflycheck
-            executor.submit(lambda: brish_server_cleanup(allBrishes.values()))
+            executor.submit(brish_server_cleanup, list(allBrishes.values()))
             # https://docs.python.org/3/library/concurrent.futures.html
     else:
-        executor.submit(lambda: brish_server_cleanup(brish_server))
+        executor.submit(brish_server_cleanup, brish_server)
 
     brish_server = newBrish(server_count=brishes_n)
     brishes = [i for i in range(brishes_n)]
