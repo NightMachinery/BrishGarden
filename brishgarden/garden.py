@@ -2,7 +2,7 @@ import logging
 import os
 import time
 import brish
-from brish import CmdResult, z, zp, UninitializedBrishException, zn
+from brish import CmdResult, z, zp, UninitializedBrishException
 from pynight.common_async import force_async, async_max_workers_set
 from pynight.common_fastapi import FastAPISettings, EndpointLoggingFilter1, request_path_get, check_ip, api_key_dependency_make
 from pynight.common_telegram import log_tlg
@@ -143,11 +143,26 @@ def garden_binary_p():
     return bool(getattr(brish_server, "binary", False))
 
 
+def garden_notify(cmd):
+    """Run the notification command `cmd` (a bell, a sound) on a free worker
+    of the shared pool, and log an error instead of raising it.
+
+    `brish.zn` would run it on Brish's default instance, which starts four
+    more zsh workers on first use and keeps them for the life of the garden,
+    for these few commands alone. That instance can still start when a
+    request comes from a new IP: PyNight's `log_tlg` uses it.
+    """
+    try:
+        brish_server.send_cmd(cmd)
+    except Exception:
+        logger.warning(f"Notification failed: {cmd}\n{traceback.format_exc()}")
+
+
 allBrishes = None
 brish_server = None
 logger.info(f"Initializing {brishes_n} brishes in {garden_mode.name} mode ...")
 init_brishes()
-zn("bell_awaysh=no bell-sc2-nav_online || true")
+garden_notify("bell_awaysh=no bell-sc2-nav_online || true")
 
 ###
 @app.get("/")
@@ -335,12 +350,15 @@ def zsh_finish(res, ctx):
         if ctx.log_level >= 1:
             ctx.nolog or logger.warning(f"Command failed:\n{res.longstr}")
             if ctx.log_level >= 1:
-                zn(
+                #: In the background: with every worker busy, it waits for
+                #: one, and the request's reply must not wait with it.
+                executor.submit(
+                    garden_notify,
                     """
                     if isMe && isLocal ; then
-                       {{ tts-glados1-cached "A command has failed." ; bello }} &>/dev/null </dev/null &
+                       { tts-glados1-cached "A command has failed." ; bello } &>/dev/null </dev/null &
                     fi
-                    """
+                    """,
                 )
 
 
