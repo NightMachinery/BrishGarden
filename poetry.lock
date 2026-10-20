@@ -2918,21 +2918,21 @@ windows-terminal = ["colorama (>=0.4.6)"]
 
 [[package]]
 name = "pynight"
-version = "0.2.6"
+version = "0.2.7"
 description = "My Python utility library."
 optional = false
 python-versions = "<4.0,>=3.8"
 groups = ["main"]
 files = [
-    {file = "pynight-0.2.6-py3-none-any.whl", hash = "sha256:ba6383ae44003cecc6cdd4c952a0cd4b49e9393d8079d8e9e0a5998b33619780"},
-    {file = "pynight-0.2.6.tar.gz", hash = "sha256:8c5ceb7728866ca316fdd8535c3a77a3513e333018efea439d59114a5145f0f8"},
+    {file = "pynight-0.2.7-py3-none-any.whl", hash = "sha256:26ee6db04a9fe295ae616f47c989f448c15e225da4562d3e641af84b37b12b37"},
+    {file = "pynight-0.2.7.tar.gz", hash = "sha256:74df95008db513eae8621e91c3fecb32655b25e0be20ce736224a89ac42e461b"},
 ]
 
 [package.dependencies]
 aiofile = "*"
 brish = ">=0.3.3,<0.5"
 dnspython = ">=2.1.0,<3.0.0"
-executing = ">=1.2.0,<2.0.0"
+executing = ">=1.2.0,<3"
 matplotlib = ">=3.7.1,<4.0.0"
 openai = ">=1.14.2,<3"
 pyperclip = ">=1.8.2,<2.0.0"
