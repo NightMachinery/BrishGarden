@@ -21,7 +21,7 @@ fastapi = {extras = ["all"], version = ">=0.133.0"}
 starlette = ">=1.3.1"
 #: uvicorn 0.47 imports the app before it starts the event loop, and
 #: garden.py needs a running loop at import (`async_max_workers_set`).
-uvicorn = {extras = ["standard"], version = ">=0.23.2,<0.47"}
+uvicorn = {extras = ["standard"], version = ">=0.54,<0.55"}
 pydantic-settings = "^2.14.2"
 #: Brish 0.4.1: binary mode, popen with cancelled=, worker slots, and
 #: command templates that work on Python 3.14 (older ones read
