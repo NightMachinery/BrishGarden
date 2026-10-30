@@ -11,7 +11,7 @@ license = "MIT"
 #: The cap: spaCy 3.8.16 (PyNight requires spaCy) needs Python below 3.15,
 #: and an open range makes Poetry lock spaCy 3.8.2, numpy 2.0.2 and other
 #: old releases for the newer Pythons, none of which have wheels there.
-python = ">=3.10,<3.15"
+python = ">=3.15,<3.16"
 #: The floors of python-multipart, starlette and pydantic-settings are the
 #: first releases without a known advisory. Starlette is not imported
 #: directly, but it is the HTTP layer under FastAPI, which allows older ones.
